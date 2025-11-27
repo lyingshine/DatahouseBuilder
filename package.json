@@ -36,8 +36,9 @@
       "!scripts/__pycache__/**/*"
     ],
     "asarUnpack": [
-      "scripts/**/*.py",
-      "数据库信息"
+      "scripts/**/*",
+      "data/**/*",
+      "sql/**/*"
     ],
     "win": {
       "target": [

@@ -6,6 +6,11 @@ const fs = require('fs');
 let mainWindow;
 let pythonProcess;
 
+// 获取资源路径（开发环境和打包后都能正确工作）
+const isDev = !app.isPackaged;
+const resourcesPath = isDev ? __dirname : process.resourcesPath;
+const appPath = isDev ? __dirname : path.join(resourcesPath, 'app.asar.unpacked');
+
 // 获取用户数据目录
 const userDataPath = app.getPath('userData');
 const configPath = path.join(userDataPath, '数据库信息');
@@ -24,7 +29,7 @@ function createWindow() {
       contextIsolation: false,
       enableRemoteModule: true
     },
-    icon: path.join(__dirname, 'build/icon.png')
+    icon: path.join(resourcesPath, 'build/icon.png')
   });
 
   mainWindow.loadFile('renderer/index.html');
@@ -78,7 +83,7 @@ ipcMain.on('window-close', () => {
 // IPC 通信处理
 ipcMain.handle('generate-ods', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(__dirname, 'scripts/generate_data.py');
+    const scriptPath = path.join(appPath, 'scripts/generate_data.py');
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
@@ -110,7 +115,7 @@ ipcMain.handle('generate-ods', async (event, config) => {
 
 ipcMain.handle('generate-dwd', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(__dirname, 'scripts/transform_dwd.py');
+    const scriptPath = path.join(appPath, 'scripts/transform_dwd.py');
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config || {})], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
@@ -135,7 +140,7 @@ ipcMain.handle('generate-dwd', async (event, config) => {
 
 ipcMain.handle('generate-dws', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(__dirname, 'scripts/transform_dws.py');
+    const scriptPath = path.join(appPath, 'scripts/transform_dws.py');
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config || {})], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
@@ -160,7 +165,7 @@ ipcMain.handle('generate-dws', async (event, config) => {
 
 ipcMain.handle('preview-data', async (event, layer) => {
   const fs = require('fs').promises;
-  const dataPath = path.join(__dirname, `data/${layer}`);
+  const dataPath = path.join(appPath, `data/${layer}`);
   
   try {
     const files = await fs.readdir(dataPath);
@@ -188,7 +193,7 @@ ipcMain.handle('preview-data', async (event, layer) => {
 ipcMain.handle('import-ods', async (event, config) => {
   return new Promise((resolve, reject) => {
     const fs = require('fs');
-    const dataPath = path.join(__dirname, 'data/ods');
+    const dataPath = path.join(appPath, 'data/ods');
     
     try {
       // 确保目录存在
@@ -231,7 +236,7 @@ ipcMain.handle('import-ods', async (event, config) => {
 
 ipcMain.handle('load-to-database', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(__dirname, 'scripts/load_to_database.py');
+    const scriptPath = path.join(appPath, 'scripts/load_to_database.py');
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
@@ -256,7 +261,7 @@ ipcMain.handle('load-to-database', async (event, config) => {
 
 ipcMain.handle('clear-data', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(__dirname, 'scripts/clear_data.py');
+    const scriptPath = path.join(appPath, 'scripts/clear_data.py');
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
@@ -345,7 +350,7 @@ ipcMain.handle('load-db-config', async () => {
 // 测试数据库连接
 ipcMain.handle('test-db-connection', async (event, dbConfig) => {
   return new Promise((resolve) => {
-    const scriptPath = path.join(__dirname, 'scripts/test_connection.py');
+    const scriptPath = path.join(appPath, 'scripts/test_connection.py');
     const testProcess = spawn('python', [scriptPath, JSON.stringify(dbConfig)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
