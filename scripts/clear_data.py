@@ -12,10 +12,6 @@ import shutil
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 
-# 从配置文件读取数据库配置
-from db_config import DB_CONFIG
-
-
 def clear_local_data():
     """清空本地CSV文件"""
     print("\n清空本地数据...")
@@ -40,12 +36,12 @@ def clear_local_data():
     return total_deleted > 0
 
 
-def clear_database_tables():
+def clear_database_tables(db_config):
     """清空数据库表"""
     print("\n清空数据库表...")
     
     try:
-        conn = pymysql.connect(**DB_CONFIG)
+        conn = pymysql.connect(**db_config)
         cursor = conn.cursor()
         
         # 获取所有表
@@ -95,9 +91,14 @@ def main():
         except:
             pass
     
-    # 更新数据库配置
-    if 'dbConfig' in config:
-        DB_CONFIG.update(config['dbConfig'])
+    # 获取数据库配置
+    db_config = config.get('dbConfig', {
+        'host': 'localhost',
+        'port': 3306,
+        'database': 'datas',
+        'user': 'root',
+        'password': ''
+    })
     
     clear_type = config.get('clearType', 'all')  # all, local, database
     
@@ -105,7 +106,7 @@ def main():
     print("数据清空工具")
     print("="*60)
     print(f"清空类型: {clear_type}")
-    print(f"数据库: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
+    print(f"数据库: {db_config['host']}:{db_config['port']}/{db_config['database']}")
     print("="*60)
     
     success = True
@@ -114,7 +115,7 @@ def main():
         success = clear_local_data() and success
     
     if clear_type in ['all', 'database']:
-        success = clear_database_tables() and success
+        success = clear_database_tables(db_config) and success
     
     print("\n" + "="*60)
     if success:
