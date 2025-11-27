@@ -27,15 +27,23 @@ def get_db_connection(db_config):
 def execute_sql(conn, sql, description):
     """执行SQL语句"""
     try:
+        print(f"  正在执行: {description}...")
+        sys.stdout.flush()
+        
         cursor = conn.cursor()
         cursor.execute(sql)
         conn.commit()
         affected_rows = cursor.rowcount
         cursor.close()
-        print(f"✓ {description} - 影响 {affected_rows} 行")
+        
+        print(f"  ✓ {description} - 影响 {affected_rows} 行")
+        sys.stdout.flush()
         return True
     except Exception as e:
-        print(f"✗ {description} 失败: {e}")
+        print(f"  ✗ {description} 失败: {e}")
+        sys.stdout.flush()
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -55,24 +63,33 @@ def transform_dws(mode='full', db_config=None):
     try:
         # 创建索引以加速查询
         print("\n创建索引...")
+        sys.stdout.flush()
         cursor = conn.cursor()
         
         # 为 dwd_order_fact 创建索引
         try:
+            print("  正在为 dwd_order_fact 创建索引...")
+            sys.stdout.flush()
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_date ON dwd_order_fact(订单日期)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_status ON dwd_order_fact(订单状态)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_store ON dwd_order_fact(店铺ID)")
-            print("✓ dwd_order_fact 索引创建完成")
-        except:
-            pass
+            print("  ✓ dwd_order_fact 索引创建完成")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"  索引创建警告: {e}")
+            sys.stdout.flush()
         
         # 为 dwd_order_detail_fact 创建索引
         try:
+            print("  正在为 dwd_order_detail_fact 创建索引...")
+            sys.stdout.flush()
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_detail_order ON dwd_order_detail_fact(订单ID)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_detail_product ON dwd_order_detail_fact(商品ID)")
-            print("✓ dwd_order_detail_fact 索引创建完成")
-        except:
-            pass
+            print("  ✓ dwd_order_detail_fact 索引创建完成")
+            sys.stdout.flush()
+        except Exception as e:
+            print(f"  索引创建警告: {e}")
+            sys.stdout.flush()
         
         conn.commit()
         cursor.close()
@@ -215,21 +232,22 @@ def transform_dws(mode='full', db_config=None):
         if mode == 'full':
             execute_sql(conn, "DROP TABLE IF EXISTS dws_promotion_summary", "删除旧表 dws_promotion_summary")
         
+        # 简化版推广汇总表（只包含推广数据，不关联订单以提升性能）
         sql_promotion_summary = """
         CREATE TABLE IF NOT EXISTS dws_promotion_summary AS
         SELECT 
             pm.date AS 日期,
             pm.platform AS 平台,
             pm.store_id AS 店铺ID,
-            s.店铺名称,
+            COALESCE(s.店铺名称, '') AS 店铺名称,
             pm.product_id AS 商品ID,
-            p.商品名称,
-            p.一级类目,
-            p.二级类目,
+            COALESCE(p.商品名称, '') AS 商品名称,
+            COALESCE(p.一级类目, '') AS 一级类目,
+            COALESCE(p.二级类目, '') AS 二级类目,
             pm.channel AS 推广渠道,
-            COALESCE(SUM(pm.cost), 0) AS 推广花费,
-            COALESCE(SUM(pm.impressions), 0) AS 曝光量,
-            COALESCE(SUM(pm.clicks), 0) AS 点击量,
+            SUM(pm.cost) AS 推广花费,
+            SUM(pm.impressions) AS 曝光量,
+            SUM(pm.clicks) AS 点击量,
             CASE 
                 WHEN SUM(pm.impressions) > 0 THEN ROUND(SUM(pm.clicks) / SUM(pm.impressions) * 100, 2)
                 ELSE 0
@@ -238,24 +256,14 @@ def transform_dws(mode='full', db_config=None):
                 WHEN SUM(pm.clicks) > 0 THEN ROUND(SUM(pm.cost) / SUM(pm.clicks), 2)
                 ELSE 0
             END AS 平均点击成本,
-            COUNT(DISTINCT o.订单ID) AS 成交订单数,
-            COALESCE(SUM(o.实付金额), 0) AS 成交金额,
-            COALESCE(SUM(od.数量), 0) AS 成交件数,
-            CASE 
-                WHEN SUM(pm.clicks) > 0 THEN ROUND(COUNT(DISTINCT o.订单ID) / SUM(pm.clicks) * 100, 2)
-                ELSE 0
-            END AS 转化率,
-            CASE 
-                WHEN SUM(pm.cost) > 0 THEN ROUND(SUM(o.实付金额) / SUM(pm.cost), 2)
-                ELSE 0
-            END AS ROI
+            0 AS 成交订单数,
+            0 AS 成交金额,
+            0 AS 成交件数,
+            0 AS 转化率,
+            0 AS ROI
         FROM ods_promotion pm
         LEFT JOIN dim_product p ON pm.product_id = p.商品ID
         LEFT JOIN dim_store s ON pm.store_id = s.店铺ID
-        LEFT JOIN dwd_order_detail_fact od ON pm.product_id = od.商品ID 
-        LEFT JOIN dwd_order_fact o ON od.订单ID = o.订单ID 
-            AND pm.date = o.订单日期 
-            AND o.订单状态 = '已完成'
         GROUP BY pm.date, pm.platform, pm.store_id, s.店铺名称, pm.product_id, 
                  p.商品名称, p.一级类目, p.二级类目, pm.channel
         """
@@ -263,13 +271,15 @@ def transform_dws(mode='full', db_config=None):
         execute_sql(conn, sql_promotion_summary, "创建推广汇总表")
         
         print("\n" + "="*60)
-        print("DWS层转换完成！")
+        print("✓ DWS层转换完成！")
         print("="*60)
+        sys.stdout.flush()
         
         return True
         
     except Exception as e:
-        print(f"转换失败: {e}")
+        print(f"✗ 转换失败: {e}")
+        sys.stdout.flush()
         return False
     finally:
         conn.close()

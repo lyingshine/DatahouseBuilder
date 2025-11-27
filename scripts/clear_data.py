@@ -76,7 +76,9 @@ def clear_database_tables(db_config):
             password=str(db_config['password']),
             database=db_config['database'],
             charset='utf8mb4',
-            connect_timeout=10
+            connect_timeout=10,
+            read_timeout=30,
+            write_timeout=30
         )
         cursor = conn.cursor()
         
@@ -116,27 +118,34 @@ def clear_database_tables(db_config):
         print(f"[进度] 找到 {len(program_tables)} 张程序生成的表")
         sys.stdout.flush()
         
-        # 临时禁用外键检查
+        # 临时禁用外键检查和自动提交
+        print("[进度] 禁用外键检查...")
+        sys.stdout.flush()
         cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+        cursor.execute("SET autocommit = 1")
         
         total_deleted = 0
         total_tables = len(program_tables)
         
-        for table in program_tables:
+        # 批量删除，减少输出频率
+        for i, table in enumerate(program_tables):
             try:
                 cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
                 total_deleted += 1
-                progress = int((total_deleted / total_tables) * 100)
-                print(f"[进度] ({total_deleted}/{total_tables}) {progress}% - 删除表: {table}")
-                sys.stdout.flush()
+                
+                # 每10%或每10个表显示一次进度
+                if (i + 1) % max(1, total_tables // 10) == 0 or (i + 1) % 10 == 0:
+                    progress = int((total_deleted / total_tables) * 100)
+                    print(f"[进度] {progress}% ({total_deleted}/{total_tables})")
+                    sys.stdout.flush()
             except Exception as e:
                 print(f"[错误] 删除失败: {table} - {e}")
                 sys.stdout.flush()
         
         # 恢复外键检查
+        print("[进度] 恢复外键检查...")
+        sys.stdout.flush()
         cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
-        
-        conn.commit()
         cursor.close()
         conn.close()
         

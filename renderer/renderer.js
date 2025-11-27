@@ -41,11 +41,11 @@ function initPlatformList() {
   container.innerHTML = platforms.map(platform => `
     <div class="platform-config-item">
       <div class="platform-header">
-        <input type="checkbox" id="platform-${platform}" value="${platform}" onchange="togglePlatform('${platform}', this.checked)">
+        <input type="checkbox" id="platform-${platform}" value="${platform}" onchange="togglePlatform('${platform}', this.checked); updateGenerateEstimate();">
         <label for="platform-${platform}">${platform}</label>
         <div class="store-count-input">
           <label>店铺数:</label>
-          <input type="number" id="count-${platform}" value="4" min="1" max="20" onchange="updateStoreCount('${platform}', this.value)" />
+          <input type="number" id="count-${platform}" value="4" min="1" max="20" onchange="updateStoreCount('${platform}', this.value); updateGenerateEstimate();" />
         </div>
       </div>
       <div class="store-list" id="stores-${platform}" style="display: none;"></div>
@@ -357,7 +357,13 @@ async function startImport() {
   
   closeDialog('import-dialog');
   updateStatus(0, '执行中...', '🔄', '#ed8936');
-  showToast('开始导入数据...', 'info');
+  
+  // 标记进程正在运行
+  currentProcessIds[0] = 'import-ods';
+  
+  // 显示步骤进度
+  showStepProgress(0);
+  appendStepLog(0, '开始导入数据...');
   
   try {
     const result = await ipcRenderer.invoke('import-ods', {
@@ -367,11 +373,15 @@ async function startImport() {
     
     if (result.success) {
       updateStatus(0, '已完成', '✅', '#48bb78');
+      appendStepLog(0, '\n[完成] 数据导入完成！');
       showToast('数据导入完成！', 'success');
     }
   } catch (error) {
     updateStatus(0, '失败', '❌', '#f56565');
+    appendStepLog(0, `\n[错误] ${error.message}`);
     showToast(`导入失败: ${error.message}`, 'error');
+  } finally {
+    hideStepProgress(0);
   }
 }
 
@@ -385,6 +395,134 @@ function updateStatus(step, status, icon, color) {
   const statusEl = document.getElementById(`status-${step}`);
   statusEl.textContent = `${icon} ${status}`;
   statusEl.style.color = color;
+  
+  // 控制按钮显示
+  const execBtn = document.getElementById(`exec-btn-${step}`);
+  const stopBtn = document.getElementById(`stop-btn-${step}`);
+  const estimateEl = document.getElementById(`estimate-${step}`);
+  
+  if (status === '执行中...') {
+    if (execBtn) execBtn.style.display = 'none';
+    if (stopBtn) stopBtn.style.display = 'inline-block';
+  } else {
+    if (execBtn) execBtn.style.display = 'inline-block';
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (estimateEl) estimateEl.style.display = 'none';
+  }
+}
+
+// 显示预估时间并开始智能倒计时
+function showEstimate(step, seconds) {
+  const estimateEl = document.getElementById(`estimate-${step}`);
+  if (estimateEl && seconds > 0) {
+    estimateEl.style.display = 'inline-block';
+    
+    // 清除之前的定时器
+    if (countdownTimers[step]) {
+      clearInterval(countdownTimers[step]);
+    }
+    
+    // 记录开始时间
+    stepStartTime[step] = Date.now();
+    let initialEstimate = seconds;
+    
+    // 更新显示
+    const updateDisplay = () => {
+      const elapsed = Math.floor((Date.now() - stepStartTime[step]) / 1000);
+      const progress = stepProgress[step];
+      
+      let remaining;
+      
+      // 如果有进度信息，根据进度计算剩余时间
+      if (progress.total > 0 && progress.current > 0) {
+        const progressRate = progress.current / progress.total;
+        const estimatedTotal = elapsed / progressRate;
+        remaining = Math.max(0, Math.ceil(estimatedTotal - elapsed));
+      } else {
+        // 否则使用简单倒计时，但不低于0
+        remaining = Math.max(0, initialEstimate - elapsed);
+      }
+      
+      if (remaining === 0) {
+        estimateEl.textContent = '⏱ 即将完成...';
+      } else {
+        const minutes = Math.floor(remaining / 60);
+        const secs = remaining % 60;
+        const timeText = minutes > 0 ? `${minutes}分${secs}秒` : `${secs}秒`;
+        estimateEl.textContent = `⏱ 剩余约 ${timeText}`;
+      }
+    };
+    
+    updateDisplay();
+    
+    // 每秒更新
+    countdownTimers[step] = setInterval(updateDisplay, 1000);
+  }
+}
+
+// 更新步骤进度（从日志中提取进度信息）
+function updateStepProgress(step, message) {
+  // 尝试从消息中提取进度信息，如 "(5/10) 50%"
+  const progressMatch = message.match(/\((\d+)\/(\d+)\)/);
+  if (progressMatch) {
+    stepProgress[step].current = parseInt(progressMatch[1]);
+    stepProgress[step].total = parseInt(progressMatch[2]);
+  }
+}
+
+// 停止倒计时
+function stopEstimate(step) {
+  if (countdownTimers[step]) {
+    clearInterval(countdownTimers[step]);
+    countdownTimers[step] = null;
+  }
+  stepStartTime[step] = null;
+  stepProgress[step] = { current: 0, total: 0 };
+  
+  const estimateEl = document.getElementById(`estimate-${step}`);
+  if (estimateEl) {
+    estimateEl.style.display = 'none';
+  }
+}
+
+// 更新生成配置的预估时间
+function updateGenerateEstimate() {
+  const numUsers = parseInt(document.getElementById('num-users').value) || 3000;
+  const numOrders = parseInt(document.getElementById('num-orders').value) || 20000;
+  
+  // 基于实际测试的预估时间
+  // 数据生成: 约0.00008秒/用户, 0.00025秒/订单
+  // 数据库插入: 约0.00015秒/用户, 0.0003秒/订单
+  const generateTime = (numUsers * 0.00008 + numOrders * 0.00025) + 5;
+  const loadTime = (numUsers * 0.00015 + numOrders * 0.0003) + 15;
+  const estimateSeconds = Math.ceil(generateTime + loadTime);
+  
+  const minutes = Math.floor(estimateSeconds / 60);
+  const secs = estimateSeconds % 60;
+  const timeText = minutes > 0 ? `${minutes}分${secs}秒` : `${secs}秒`;
+  
+  const estimateTimeEl = document.getElementById('generate-estimate-time');
+  if (estimateTimeEl) {
+    estimateTimeEl.textContent = timeText;
+  }
+}
+
+// 停止进程
+async function stopProcess(step) {
+  const processId = currentProcessIds[step];
+  if (!processId) {
+    showToast('没有正在运行的进程', 'warning');
+    return;
+  }
+  
+  try {
+    await ipcRenderer.invoke('stop-process', processId);
+    updateStatus(step, '已停止', '⏹', '#f59e0b');
+    showToast('进程已停止', 'info');
+    currentProcessIds[step] = null;
+  } catch (error) {
+    showToast(`停止失败: ${error.message}`, 'error');
+  }
 }
 
 // 显示轻量级通知
@@ -428,7 +566,19 @@ async function startGenerate() {
 
   closeDialog('generate-dialog');
   updateStatus(0, '执行中...', '🔄', '#ed8936');
-  showToast('开始生成ODS层数据...', 'info');
+  
+  // 标记进程正在运行
+  currentProcessIds[0] = 'generate-ods';
+  
+  // 计算预估时间
+  const generateTime = (numUsers * 0.00008 + numOrders * 0.00025) + 5;
+  const loadTime = (numUsers * 0.00015 + numOrders * 0.0003) + 15;
+  const estimateSeconds = Math.ceil(generateTime + loadTime);
+  showEstimate(0, estimateSeconds);
+  
+  // 显示步骤进度
+  showStepProgress(0);
+  appendStepLog(0, '开始生成ODS层数据...');
 
   try {
     // 1. 生成CSV数据
@@ -440,7 +590,7 @@ async function startGenerate() {
     });
 
     if (result.success) {
-      showToast('CSV数据生成完成，正在加载到数据库...', 'info');
+      appendStepLog(0, '\nCSV数据生成完成，正在加载到数据库...');
       
       // 2. 自动加载到数据库
       const loadResult = await ipcRenderer.invoke('load-to-database', {
@@ -451,19 +601,34 @@ async function startGenerate() {
       
       if (loadResult.success) {
         updateStatusWithSql(0, '已完成', '✅', '#48bb78');
+        appendStepLog(0, '\n[完成] ODS层数据已加载到数据库！');
         showToast('ODS层数据已加载到数据库！', 'success');
       }
     }
   } catch (error) {
     updateStatus(0, '失败', '❌', '#f56565');
+    appendStepLog(0, `\n[错误] ${error.message}`);
     showToast(`执行失败: ${error.message}`, 'error');
+  } finally {
+    hideStepProgress(0);
+    stopEstimate(0);
+    currentProcessIds[0] = null;
   }
 }
 
 // 生成DWD层（直接在数据库中转换）
 async function generateDwd() {
   updateStatus(1, '执行中...', '🔄', '#ed8936');
-  showToast('开始转换DWD层数据...', 'info');
+  
+  // 标记进程正在运行
+  currentProcessIds[1] = 'generate-dwd';
+  
+  // DWD层预估时间（基于ODS数据量，假设需要15-30秒）
+  showEstimate(1, 20);
+  
+  // 显示步骤进度
+  showStepProgress(1);
+  appendStepLog(1, '开始转换DWD层数据...');
 
   try {
     const result = await ipcRenderer.invoke('generate-dwd', {
@@ -473,18 +638,33 @@ async function generateDwd() {
     
     if (result.success) {
       updateStatusWithSql(1, '已完成', '✅', '#48bb78');
+      appendStepLog(1, '\n[完成] DWD层数据转换完成！');
       showToast('DWD层数据转换完成！', 'success');
     }
   } catch (error) {
     updateStatus(1, '失败', '❌', '#f56565');
+    appendStepLog(1, `\n[错误] ${error.message}`);
     showToast(`转换失败: ${error.message}`, 'error');
+  } finally {
+    hideStepProgress(1);
+    stopEstimate(1);
+    currentProcessIds[1] = null;
   }
 }
 
 // 生成DWS层（直接在数据库中转换）
 async function generateDws() {
   updateStatus(2, '执行中...', '🔄', '#ed8936');
-  showToast('开始转换DWS层数据...', 'info');
+  
+  // 标记进程正在运行
+  currentProcessIds[2] = 'generate-dws';
+  
+  // DWS层预估时间（基于DWD数据量，假设需要10-20秒）
+  showEstimate(2, 15);
+  
+  // 显示步骤进度
+  showStepProgress(2);
+  appendStepLog(2, '开始转换DWS层数据...');
 
   try {
     const result = await ipcRenderer.invoke('generate-dws', {
@@ -494,11 +674,17 @@ async function generateDws() {
     
     if (result.success) {
       updateStatusWithSql(2, '已完成', '✅', '#48bb78');
+      appendStepLog(2, '\n[完成] DWS层数据转换完成！');
       showToast('DWS层数据转换完成！', 'success');
     }
   } catch (error) {
     updateStatus(2, '失败', '❌', '#f56565');
+    appendStepLog(2, `\n[错误] ${error.message}`);
     showToast(`转换失败: ${error.message}`, 'error');
+  } finally {
+    hideStepProgress(2);
+    stopEstimate(2);
+    currentProcessIds[2] = null;
   }
 }
 
@@ -553,22 +739,123 @@ async function previewData(layer, step) {
   }
 }
 
-// 当前是否显示进度日志
-let showingProgressLog = false;
+// 当前运行的步骤
+let currentRunningStep = null;
+
+// 当前运行的进程ID
+let currentProcessIds = {
+  0: null,  // ODS
+  1: null,  // DWD
+  2: null   // DWS
+};
+
+// 倒计时定时器
+let countdownTimers = {
+  0: null,
+  1: null,
+  2: null
+};
+
+// 步骤开始时间
+let stepStartTime = {
+  0: null,
+  1: null,
+  2: null
+};
+
+// 步骤进度信息
+let stepProgress = {
+  0: { current: 0, total: 0 },
+  1: { current: 0, total: 0 },
+  2: { current: 0, total: 0 }
+};
 
 // 监听日志消息
 ipcRenderer.on('log-message', (event, message) => {
   console.log(message);
   
-  // 如果进度对话框打开，显示日志
-  if (showingProgressLog) {
+  // 如果有正在运行的步骤，显示日志
+  if (currentRunningStep !== null) {
+    appendStepLog(currentRunningStep, message);
+  }
+  
+  // 如果清空数据对话框打开，也显示日志
+  const progressDialog = document.getElementById('progress-dialog');
+  if (progressDialog && progressDialog.style.display === 'flex') {
     appendProgressLog(message);
   }
 });
 
-// 添加进度日志
+// 添加步骤日志（只显示最新一行）
+function appendStepLog(step, message) {
+  const logContainer = document.getElementById(`progress-log-${step}`);
+  if (!logContainer) return;
+  
+  // 更新进度信息（用于智能时间预估）
+  updateStepProgress(step, message);
+  
+  // 过滤：只显示重要信息
+  const isImportant = 
+    message.includes('[错误]') || 
+    message.includes('✗') || 
+    message.includes('失败') ||
+    message.includes('[完成]') || 
+    message.includes('✓') ||
+    message.includes('完成') ||
+    message.includes('[进度]') ||
+    message.includes('开始') ||
+    message.includes('生成') ||
+    message.includes('保存') ||
+    message.includes('加载') ||
+    message.includes('转换') ||
+    message.includes('创建') ||
+    message.includes('正在') ||
+    message.includes('%');
+  
+  if (!isImportant) return;
+  
+  // 清空之前的内容，只显示最新一行
+  logContainer.innerHTML = '';
+  
+  const logLine = document.createElement('div');
+  logLine.className = 'log-line';
+  
+  // 根据消息类型设置样式
+  if (message.includes('[错误]') || message.includes('✗') || message.includes('失败')) {
+    logLine.classList.add('log-error');
+  } else if (message.includes('[完成]') || message.includes('✓') || message.includes('完成')) {
+    logLine.classList.add('log-success');
+  } else if (message.includes('[进度]') || message.includes('%')) {
+    logLine.classList.add('log-progress');
+  } else if (message.includes('[配置]') || message.includes('[信息]')) {
+    logLine.classList.add('log-info');
+  }
+  
+  logLine.textContent = message;
+  logContainer.appendChild(logLine);
+}
+
+// 显示步骤进度
+function showStepProgress(step) {
+  const progressEl = document.getElementById(`step-progress-${step}`);
+  const logContainer = document.getElementById(`progress-log-${step}`);
+  if (progressEl && logContainer) {
+    logContainer.innerHTML = '';
+    progressEl.style.display = 'block';
+    currentRunningStep = step;
+  }
+}
+
+// 隐藏步骤进度
+function hideStepProgress(step) {
+  currentRunningStep = null;
+}
+
+// 添加进度日志（用于清空数据对话框，限制显示行数）
 function appendProgressLog(message) {
   const logContainer = document.getElementById('progress-log');
+  if (!logContainer) return;
+  
   const logLine = document.createElement('div');
   logLine.className = 'log-line';
   
@@ -586,22 +873,33 @@ function appendProgressLog(message) {
   logLine.textContent = message;
   logContainer.appendChild(logLine);
   
+  // 限制最多显示100行
+  const maxLines = 100;
+  const lines = logContainer.children;
+  if (lines.length > maxLines) {
+    const removeCount = lines.length - maxLines;
+    for (let i = 0; i < removeCount; i++) {
+      logContainer.removeChild(lines[0]);
+    }
+  }
+  
   // 自动滚动到底部
-  logContainer.scrollTop = logContainer.scrollHeight;
+  const progressLogContainer = logContainer.parentElement;
+  if (progressLogContainer) {
+    progressLogContainer.scrollTop = progressLogContainer.scrollHeight;
+  }
 }
 
-// 显示进度对话框
+// 显示进度对话框（用于清空数据）
 function showProgressDialog(title) {
   document.getElementById('progress-title').textContent = title;
   document.getElementById('progress-log').innerHTML = '';
   document.getElementById('progress-dialog').style.display = 'flex';
-  showingProgressLog = true;
 }
 
 // 关闭进度对话框
 function closeProgressDialog() {
   document.getElementById('progress-dialog').style.display = 'none';
-  showingProgressLog = false;
 }
 
 // 窗口控制

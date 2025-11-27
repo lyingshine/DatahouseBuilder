@@ -27,15 +27,21 @@ def get_db_connection(db_config):
 def execute_sql(conn, sql, description):
     """执行SQL语句"""
     try:
+        print(f"  正在执行: {description}...")
+        sys.stdout.flush()
+        
         cursor = conn.cursor()
         cursor.execute(sql)
         conn.commit()
         affected_rows = cursor.rowcount
         cursor.close()
-        print(f"✓ {description} - 影响 {affected_rows} 行")
+        
+        print(f"  ✓ {description} - 影响 {affected_rows} 行")
+        sys.stdout.flush()
         return True
     except Exception as e:
-        print(f"✗ {description} 失败: {e}")
+        print(f"  ✗ {description} 失败: {e}")
+        sys.stdout.flush()
         return False
 
 
@@ -208,13 +214,15 @@ def transform_dwd(mode='full', db_config=None):
         execute_sql(conn, sql_dim_user, "创建用户维度表")
         
         print("\n" + "="*60)
-        print("DWD层转换完成！")
+        print("✓ DWD层转换完成！")
         print("="*60)
+        sys.stdout.flush()
         
         return True
         
     except Exception as e:
-        print(f"转换失败: {e}")
+        print(f"✗ 转换失败: {e}")
+        sys.stdout.flush()
         return False
     finally:
         conn.close()

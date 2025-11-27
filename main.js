@@ -5,6 +5,7 @@ const fs = require('fs');
 
 let mainWindow;
 let pythonProcess;
+let currentProcessType = null; // 记录当前进程类型
 
 // 获取资源路径（开发环境和打包后都能正确工作）
 const isDev = !app.isPackaged;
@@ -87,6 +88,7 @@ ipcMain.handle('generate-ods', async (event, config) => {
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
+    currentProcessType = 'generate-ods';
 
     let output = '';
     let error = '';
@@ -104,6 +106,8 @@ ipcMain.handle('generate-ods', async (event, config) => {
     });
 
     pythonProcess.on('close', (code) => {
+      pythonProcess = null;
+      currentProcessType = null;
       if (code === 0) {
         resolve({ success: true, message: 'ODS层数据生成完成！' });
       } else {
@@ -119,6 +123,7 @@ ipcMain.handle('generate-dwd', async (event, config) => {
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config || {})], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
+    currentProcessType = 'generate-dwd';
 
     pythonProcess.stdout.on('data', (data) => {
       event.sender.send('log-message', data.toString('utf8'));
@@ -129,6 +134,8 @@ ipcMain.handle('generate-dwd', async (event, config) => {
     });
 
     pythonProcess.on('close', (code) => {
+      pythonProcess = null;
+      currentProcessType = null;
       if (code === 0) {
         resolve({ success: true, message: 'DWD层数据转换完成！' });
       } else {
@@ -144,6 +151,7 @@ ipcMain.handle('generate-dws', async (event, config) => {
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config || {})], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
+    currentProcessType = 'generate-dws';
 
     pythonProcess.stdout.on('data', (data) => {
       event.sender.send('log-message', data.toString('utf8'));
@@ -154,6 +162,8 @@ ipcMain.handle('generate-dws', async (event, config) => {
     });
 
     pythonProcess.on('close', (code) => {
+      pythonProcess = null;
+      currentProcessType = null;
       if (code === 0) {
         resolve({ success: true, message: 'DWS层数据转换完成！' });
       } else {
@@ -240,6 +250,7 @@ ipcMain.handle('load-to-database', async (event, config) => {
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
+    currentProcessType = 'load-to-database';
 
     pythonProcess.stdout.on('data', (data) => {
       event.sender.send('log-message', data.toString('utf8'));
@@ -250,6 +261,8 @@ ipcMain.handle('load-to-database', async (event, config) => {
     });
 
     pythonProcess.on('close', (code) => {
+      pythonProcess = null;
+      currentProcessType = null;
       if (code === 0) {
         resolve({ success: true, message: '数据加载完成！' });
       } else {
@@ -265,6 +278,7 @@ ipcMain.handle('clear-data', async (event, config) => {
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });
+    currentProcessType = 'clear-data';
 
     pythonProcess.stdout.on('data', (data) => {
       event.sender.send('log-message', data.toString('utf8'));
@@ -275,6 +289,8 @@ ipcMain.handle('clear-data', async (event, config) => {
     });
 
     pythonProcess.on('close', (code) => {
+      pythonProcess = null;
+      currentProcessType = null;
       if (code === 0) {
         resolve({ success: true, message: '数据清空完成！' });
       } else {
@@ -375,4 +391,19 @@ ipcMain.handle('test-db-connection', async (event, dbConfig) => {
       resolve({ success: true, connected: false, message: '连接超时' });
     }, 5000);
   });
+});
+
+// 停止进程
+ipcMain.handle('stop-process', async (event, processId) => {
+  if (pythonProcess && currentProcessType) {
+    try {
+      pythonProcess.kill('SIGTERM');
+      pythonProcess = null;
+      currentProcessType = null;
+      return { success: true, message: '进程已停止' };
+    } catch (error) {
+      return { success: false, message: `停止失败: ${error.message}` };
+    }
+  }
+  return { success: false, message: '没有运行中的进程' };
 });

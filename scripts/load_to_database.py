@@ -156,9 +156,14 @@ def load_layer_to_db(layer, mode='full', db_config=None):
     print(f"开始加载 {layer.upper()} 层数据 - 模式: {mode}")
     print(f"{'='*60}")
     
-    # 创建数据库引擎
+    # 创建数据库引擎（优化连接池和性能参数）
     engine = create_engine(
-        f"mysql+pymysql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}?charset=utf8mb4"
+        f"mysql+pymysql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}?charset=utf8mb4",
+        pool_size=10,  # 连接池大小
+        max_overflow=20,  # 最大溢出连接数
+        pool_pre_ping=True,  # 连接前检查
+        pool_recycle=3600,  # 连接回收时间
+        echo=False  # 不输出SQL日志
     )
     
     # 获取该层的所有CSV文件
@@ -181,11 +186,16 @@ def load_layer_to_db(layer, mode='full', db_config=None):
         
         try:
             # 读取CSV
+            print(f"  正在读取: {table_name}...")
+            sys.stdout.flush()
             df = pd.read_csv(csv_path, encoding='utf-8-sig')
             
             if len(df) == 0:
                 print(f"  跳过 {table_name}: 文件为空")
                 continue
+            
+            print(f"  读取完成: {len(df)} 行数据")
+            sys.stdout.flush()
             
             # 列名映射
             if table_name in COLUMN_MAPPING:
@@ -196,22 +206,44 @@ def load_layer_to_db(layer, mode='full', db_config=None):
                 with engine.connect() as conn:
                     conn.execute(text(f"DROP TABLE IF EXISTS {table_name}"))
                     conn.commit()
-                print(f"  ✓ 删除旧表: {table_name}")
+                print(f"  删除旧表: {table_name}")
+                sys.stdout.flush()
             
-            # 写入数据库
+            # 写入数据库（优化：大数据量使用批量插入）
+            print(f"  正在写入数据库...")
+            sys.stdout.flush()
+            
+            row_count = len(df)
+            
+            # 对于大数据量，使用更大的chunksize
+            if row_count > 100000:
+                chunk_size = 100000  # 10万行一批
+                print(f"  使用大批量模式: {chunk_size}行/批")
+            elif row_count > 50000:
+                chunk_size = 50000
+            elif row_count > 10000:
+                chunk_size = 20000
+            else:
+                chunk_size = 10000
+            
+            sys.stdout.flush()
+            
             df.to_sql(
                 name=table_name,
                 con=engine,
                 if_exists='append' if mode == 'incremental' else 'replace',
                 index=False,
-                chunksize=1000
+                chunksize=chunk_size,
+                method='multi'  # 使用批量插入
             )
             
             print(f"  ✓ 加载成功: {table_name} ({len(df)} 行)")
+            sys.stdout.flush()
             success_count += 1
             
         except Exception as e:
             print(f"  ✗ 加载失败: {table_name} - {str(e)}")
+            sys.stdout.flush()
     
     print(f"\n{layer.upper()} 层加载完成: {success_count}/{len(csv_files)} 个表成功")
     return success_count == len(csv_files)

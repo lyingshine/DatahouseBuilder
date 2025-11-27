@@ -81,8 +81,11 @@
             <div class="sql-content" id="sql-content-0"></div>
           </div>
           <div class="step-actions">
-            <button class="btn btn-primary" style="background: #48bb78;" onclick="showOdsConfig()">
+            <button class="btn btn-primary" style="background: #48bb78;" onclick="showOdsConfig()" id="exec-btn-0">
               ▶ 执行
+            </button>
+            <button class="btn btn-danger" onclick="stopProcess(0)" id="stop-btn-0" style="display: none;">
+              ⏹ 停止
             </button>
             <button class="btn btn-secondary" onclick="previewData('ods', 0)">
               👁 预览
@@ -90,8 +93,11 @@
             <button class="btn btn-secondary" onclick="showSqlInfo(0)" id="sql-btn-0" style="display: none;">
               📋 查看SQL
             </button>
-
             <span class="step-status" id="status-0">⚪ 未执行</span>
+            <span class="step-estimate" id="estimate-0" style="display: none;"></span>
+          </div>
+          <div class="step-progress" id="step-progress-0" style="display: none;">
+            <div class="progress-log" id="progress-log-0"></div>
           </div>
         </div>
       </div>
@@ -120,8 +126,11 @@
             <div class="sql-content" id="sql-content-1"></div>
           </div>
           <div class="step-actions">
-            <button class="btn btn-primary" style="background: #667eea;" onclick="generateDwd()">
+            <button class="btn btn-primary" style="background: #667eea;" onclick="generateDwd()" id="exec-btn-1">
               ▶ 执行
+            </button>
+            <button class="btn btn-danger" onclick="stopProcess(1)" id="stop-btn-1" style="display: none;">
+              ⏹ 停止
             </button>
             <button class="btn btn-secondary" onclick="previewData('dwd', 1)">
               👁 预览
@@ -129,8 +138,11 @@
             <button class="btn btn-secondary" onclick="showSqlInfo(1)" id="sql-btn-1" style="display: none;">
               📋 查看SQL
             </button>
-
             <span class="step-status" id="status-1">⚪ 未执行</span>
+            <span class="step-estimate" id="estimate-1" style="display: none;"></span>
+          </div>
+          <div class="step-progress" id="step-progress-1" style="display: none;">
+            <div class="progress-log" id="progress-log-1"></div>
           </div>
         </div>
       </div>
@@ -159,8 +171,11 @@
             <div class="sql-content" id="sql-content-2"></div>
           </div>
           <div class="step-actions">
-            <button class="btn btn-primary" style="background: #ed8936;" onclick="generateDws()">
+            <button class="btn btn-primary" style="background: #ed8936;" onclick="generateDws()" id="exec-btn-2">
               ▶ 执行
+            </button>
+            <button class="btn btn-danger" onclick="stopProcess(2)" id="stop-btn-2" style="display: none;">
+              ⏹ 停止
             </button>
             <button class="btn btn-secondary" onclick="previewData('dws', 2)">
               👁 预览
@@ -168,8 +183,11 @@
             <button class="btn btn-secondary" onclick="showSqlInfo(2)" id="sql-btn-2" style="display: none;">
               📋 查看SQL
             </button>
-
             <span class="step-status" id="status-2">⚪ 未执行</span>
+            <span class="step-estimate" id="estimate-2" style="display: none;"></span>
+          </div>
+          <div class="step-progress" id="step-progress-2" style="display: none;">
+            <div class="progress-log" id="progress-log-2"></div>
           </div>
         </div>
       </div>
@@ -422,12 +440,17 @@
           <div class="data-config-grid">
             <div class="input-group">
               <label>用户数量</label>
-              <input type="number" id="num-users" value="3000" min="100" max="50000" />
+              <input type="number" id="num-users" value="3000" min="100" max="50000" onchange="updateGenerateEstimate()" />
             </div>
             <div class="input-group">
               <label>订单数量</label>
-              <input type="number" id="num-orders" value="20000" min="100" max="100000" />
+              <input type="number" id="num-orders" value="20000" min="100" max="100000" onchange="updateGenerateEstimate()" />
             </div>
+          </div>
+
+          <div class="estimate-info" id="generate-estimate-info">
+            <span class="estimate-icon">⏱</span>
+            <span class="estimate-text">预计耗时：<strong id="generate-estimate-time">30秒</strong></span>
           </div>
         </div>
       </div>
