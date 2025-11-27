@@ -10,6 +10,10 @@ import os
 import sys
 import json
 from faker import Faker
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import multiprocessing
+import csv
+import time
 
 fake = Faker('zh_CN')
 np.random.seed(42)
@@ -128,6 +132,10 @@ def generate_stores(platform_stores):
 
 # 生成商品信息（优化版 - 批量生成）
 def generate_products(stores_df, category_config):
+    """
+    生成商品数据
+    商品ID即为SKU编码，全局唯一
+    """
     products = []
     product_id = 1
     categories = category_config['categories']
@@ -155,8 +163,11 @@ def generate_products(stores_df, category_config):
             # 成本率根据类目不同
             cost_rate = random.uniform(0.6, 0.8) if main_cat in high_value_cats else random.uniform(0.3, 0.6)
             
+            # 商品ID作为唯一SKU编码（格式：P + 6位数字）
+            sku_code = f'P{product_id:06d}'
+            
             products.append({
-                '商品ID': f'P{product_id:06d}',
+                '商品ID': sku_code,  # SKU编码，全局唯一
                 '店铺ID': store_id,
                 '平台': platform,
                 '商品名称': f'{sub_cat}-{product_id}',
@@ -172,10 +183,19 @@ def generate_products(stores_df, category_config):
     return pd.DataFrame(products)
 
 # 生成用户信息（优化版 - 批量生成）
-def generate_users(num_users=3000):
+def generate_users(num_users=3000, time_span_days=365):
+    """
+    生成用户数据
+    num_users: 用户数量
+    time_span_days: 时间跨度（天）
+    """
     print(f"   正在生成 {num_users} 个用户...")
     cities = [fake.city() for _ in range(50)]  # 预生成城市列表
     genders = ['男', '女']
+    
+    # 计算注册日期范围（在订单时间跨度之前）
+    start_date = f'-{time_span_days + 180}d'  # 提前6个月开始注册
+    end_date = f'-{max(1, time_span_days // 4)}d'  # 到时间跨度的1/4处
     
     # 批量生成数据
     users = {
@@ -184,68 +204,66 @@ def generate_users(num_users=3000):
         '性别': [random.choice(genders) for _ in range(num_users)],
         '年龄': [random.randint(18, 65) for _ in range(num_users)],
         '城市': [random.choice(cities) for _ in range(num_users)],
-        '注册日期': [fake.date_between(start_date='-2y', end_date='-1m') for _ in range(num_users)]
+        '注册日期': [fake.date_between(start_date=start_date, end_date=end_date) for _ in range(num_users)]
     }
     
     return pd.DataFrame(users)
 
-# 生成订单数据（优化版 - 向量化生成）
-def generate_orders(stores_df, products_df, users_df, num_orders=50000):
-    print(f"   正在生成 {num_orders} 个订单...")
-    sys.stdout.flush()
-    
+# 生成订单数据的子任务（用于多进程，性能优化版）
+def generate_orders_batch(batch_id, batch_size, stores_list, store_products_dict, users_list, 
+                          start_order_id, start_detail_id, time_span_days):
+    """
+    生成一批订单数据（多进程任务，性能优化）
+    注意：store_products_dict 是字典格式，便于序列化
+    """
     orders = []
     order_details = []
     
-    # 预生成随机数据以提升性能
     order_statuses = ['已完成', '已取消', '退款']
     status_weights = [0.85, 0.10, 0.05]
     payment_methods = ['支付宝', '微信', '银行卡']
     
-    # 预先计算每个店铺的商品列表（避免重复查询）
-    store_products_map = {}
-    for store_id in stores_df['店铺ID'].unique():
-        prods = products_df[products_df['店铺ID'] == store_id]
-        if len(prods) > 0:
-            store_products_map[store_id] = prods
+    # 预生成随机索引
+    store_indices = np.random.randint(0, len(stores_list), batch_size)
+    user_indices = np.random.randint(0, len(users_list), batch_size)
     
-    # 转换为列表以加速访问
-    stores_list = stores_df.to_dict('records')
-    users_list = users_df.to_dict('records')
+    # 【性能优化1】预生成所有订单时间
+    now = datetime.now()
+    time_deltas = np.random.randint(0, time_span_days * 24 * 3600, batch_size)
+    order_times = [now - timedelta(seconds=int(delta)) for delta in time_deltas]
     
-    # 预生成随机索引（避免重复调用sample）
-    store_indices = np.random.randint(0, len(stores_list), num_orders)
-    user_indices = np.random.randint(0, len(users_list), num_orders)
+    # 【性能优化2】预生成所有随机数
+    order_status_choices = np.random.choice(order_statuses, size=batch_size, p=status_weights)
+    payment_method_choices = np.random.choice(payment_methods, size=batch_size)
+    discount_flags = np.random.random(batch_size) < 0.3
+    discount_rates = np.random.uniform(0, 0.15, batch_size)
+    shipping_fees = np.random.uniform(5, 15, batch_size)
+    update_days = np.random.randint(0, 8, batch_size)
     
-    order_id = 1
-    detail_id = 1
-    progress_step = max(1, num_orders // 20)  # 每5%显示一次进度
+    order_id = start_order_id
+    detail_id = start_detail_id
     
-    # 批量生成订单
-    for i in range(num_orders):
-        # 使用预生成的索引快速获取店铺和用户
+    for i in range(batch_size):
         store = stores_list[store_indices[i]]
         user = users_list[user_indices[i]]
         
-        # 获取该店铺的商品
-        store_products = store_products_map.get(store['店铺ID'])
-        
-        if store_products is None or len(store_products) == 0:
+        # 从字典获取商品列表
+        store_products = store_products_dict.get(store['店铺ID'])
+        if not store_products or len(store_products) == 0:
             continue
         
-        # 订单基本信息
-        order_time = fake.date_time_between(start_date='-1y', end_date='now')
-        order_status = random.choices(order_statuses, weights=status_weights)[0]
+        order_time = order_times[i]
+        order_status = order_status_choices[i]
         
-        # 订单包含1-3个商品（优化：直接使用numpy随机选择）
         num_items = random.randint(1, min(3, len(store_products)))
         product_indices = np.random.choice(len(store_products), size=num_items, replace=False)
-        selected_products = store_products.iloc[product_indices]
         
         total_amount = 0
         total_cost = 0
         
-        for _, product in selected_products.iterrows():
+        # 直接从列表获取商品
+        for idx in product_indices:
+            product = store_products[idx]
             quantity = random.randint(1, 3)
             item_amount = product['售价'] * quantity
             item_cost = product['成本'] * quantity
@@ -253,67 +271,295 @@ def generate_orders(stores_df, products_df, users_df, num_orders=50000):
             total_amount += item_amount
             total_cost += item_cost
             
-            # 使用列表而不是字典
             order_details.append([
-                f'OD{detail_id:08d}',  # 订单明细ID
-                f'O{order_id:08d}',  # 订单ID
-                product['商品ID'],  # 商品ID
-                quantity,  # 数量
-                product['售价'],  # 单价
-                round(item_amount, 2)  # 金额
+                f'OD{detail_id:08d}',
+                f'O{order_id:08d}',
+                product['商品ID'],
+                quantity,
+                product['售价'],
+                round(item_amount, 2)
             ])
             detail_id += 1
         
-        # 优惠和运费
-        discount = round(total_amount * random.uniform(0, 0.15), 2) if random.random() < 0.3 else 0
-        shipping_fee = 0 if total_amount > 99 else round(random.uniform(5, 15), 2)
+        discount = round(total_amount * discount_rates[i], 2) if discount_flags[i] else 0
+        shipping_fee = 0 if total_amount > 99 else round(shipping_fees[i], 2)
         final_amount = round(total_amount - discount + shipping_fee, 2)
         
-        # 使用列表而不是字典（更快）
         orders.append([
-            f'O{order_id:08d}',  # 订单ID
-            user['用户ID'],  # 用户ID
-            store['店铺ID'],  # 店铺ID
-            store['平台'],  # 平台
-            order_time,  # 下单时间
-            order_status,  # 订单状态
-            round(total_amount, 2),  # 商品总额
-            discount,  # 优惠金额
-            shipping_fee,  # 运费
-            final_amount if order_status == '已完成' else 0,  # 实付金额
-            round(total_cost, 2) if order_status == '已完成' else 0,  # 成本总额
-            random.choice(payment_methods),  # 支付方式
-            order_time,  # 创建时间
-            order_time + timedelta(days=random.randint(0, 7))  # 更新时间
+            f'O{order_id:08d}',
+            user['用户ID'],
+            store['店铺ID'],
+            store['平台'],
+            order_time,
+            order_status,
+            round(total_amount, 2),
+            discount,
+            shipping_fee,
+            final_amount if order_status == '已完成' else 0,
+            round(total_cost, 2) if order_status == '已完成' else 0,
+            payment_method_choices[i],
+            order_time,
+            order_time + timedelta(days=int(update_days[i]))
         ])
         
         order_id += 1
-        
-        # 显示进度
-        if i > 0 and i % progress_step == 0:
-            progress = int((i / num_orders) * 100)
-            print(f"   进度: {progress}% ({i}/{num_orders})")
-            sys.stdout.flush()
     
-    print(f"   进度: 100% ({num_orders}/{num_orders})")
+    return orders, order_details, order_id, detail_id
+
+
+# 生成订单数据（优化版 - 多线程支持，支持百万级数据）
+def generate_orders(stores_df, products_df, users_df, num_orders=50000, time_span_days=365):
+    """
+    生成订单数据（支持多线程）
+    num_orders: 订单数量
+    time_span_days: 时间跨度（天）
+    """
+    print(f"   正在生成 {num_orders:,} 个订单（时间跨度: {time_span_days}天）...")
+    
+    # 判断是否使用多进程（订单数超过10万时启用）
+    use_multithread = num_orders > 100000
+    
+    if use_multithread:
+        # 使用所有可用 CPU 核心（不限制）
+        num_threads = multiprocessing.cpu_count()
+        print(f"   使用多进程模式（{num_threads} 进程，充分利用 CPU）...")
+    
+    sys.stdout.flush()
+    
+    # 预先计算每个店铺的商品列表
+    # 转换为列表
+    stores_list = stores_df.to_dict('records')
+    users_list = users_df.to_dict('records')
+    
+    if use_multithread:
+        # 多进程模式：将 DataFrame 转换为可序列化的字典列表
+        store_products_dict = {}
+        for store_id in stores_df['店铺ID'].unique():
+            prods = products_df[products_df['店铺ID'] == store_id]
+            if len(prods) > 0:
+                # 转换为字典列表（可序列化）
+                store_products_dict[store_id] = prods.to_dict('records')
+    else:
+        # 单进程模式：使用 DataFrame（更快）
+        store_products_map = {}
+        for store_id in stores_df['店铺ID'].unique():
+            prods = products_df[products_df['店铺ID'] == store_id]
+            if len(prods) > 0:
+                store_products_map[store_id] = prods
+    
+    if use_multithread:
+        # 多进程模式：优化批次大小，确保每个进程有足够的工作量
+        # 每个进程至少处理 5000 个订单，最多处理 50000 个订单
+        min_batch = 5000
+        max_batch = 50000
+        ideal_batch = num_orders // num_threads
+        batch_size = max(min_batch, min(max_batch, ideal_batch))
+        
+        # 重新计算实际需要的进程数
+        actual_processes = min(num_threads, (num_orders + batch_size - 1) // batch_size)
+        
+        print(f"   批次大小: {batch_size:,} 订单/进程")
+        print(f"   实际进程数: {actual_processes}")
+        sys.stdout.flush()
+        
+        batches = []
+        order_id = 1
+        detail_id = 1
+        
+        for i in range(actual_processes):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, num_orders)
+            current_batch_size = end_idx - start_idx
+            
+            if current_batch_size > 0:
+                batches.append((i, current_batch_size, stores_list, store_products_dict, 
+                               users_list, order_id, detail_id, time_span_days))
+                order_id += current_batch_size * 3  # 预留ID空间（增加预留）
+                detail_id += current_batch_size * 10  # 预留明细ID空间（增加预留）
+        
+        # 使用进程池执行（绕过 GIL，真正并行）
+        all_orders = []
+        all_order_details = []
+        
+        print(f"   启动 {actual_processes} 个进程并行生成...")
+        sys.stdout.flush()
+        
+        start_time = time.time()
+        
+        # 使用实际进程数，并行执行
+        with ProcessPoolExecutor(max_workers=actual_processes) as executor:
+            # 提交所有任务（立即并行启动）
+            futures = {executor.submit(generate_orders_batch, *batch): i for i, batch in enumerate(batches)}
+            
+            completed = 0
+            total_orders_generated = 0
+            total_details_generated = 0
+            
+            # 使用 as_completed 获取完成的任务（真正并行）
+            for future in as_completed(futures):
+                batch_id = futures[future]
+                orders, order_details, _, _ = future.result()
+                all_orders.extend(orders)
+                all_order_details.extend(order_details)
+                
+                total_orders_generated += len(orders)
+                total_details_generated += len(order_details)
+                
+                completed += 1
+                progress = int((completed / len(futures)) * 100)
+                elapsed = time.time() - start_time
+                orders_per_sec = total_orders_generated / elapsed if elapsed > 0 else 0
+                
+                print(f"   进度: {progress}% ({completed}/{len(futures)} 进程) - {total_orders_generated:,} 订单 - {orders_per_sec:,.0f} 订单/秒")
+                sys.stdout.flush()
+        
+        elapsed_total = time.time() - start_time
+        orders_per_sec = total_orders_generated / elapsed_total if elapsed_total > 0 else 0
+        print(f"   ✓ 多进程生成完成: {total_orders_generated:,} 订单, {total_details_generated:,} 明细")
+        print(f"   性能: {orders_per_sec:,.0f} 订单/秒, 总耗时 {elapsed_total:.1f}秒")
+        sys.stdout.flush()
+        
+        orders = all_orders
+        order_details = all_order_details
+        
+    else:
+        # 单线程模式（订单数较少时）
+        orders = []
+        order_details = []
+        
+        order_statuses = ['已完成', '已取消', '退款']
+        status_weights = [0.85, 0.10, 0.05]
+        payment_methods = ['支付宝', '微信', '银行卡']
+        
+        store_indices = np.random.randint(0, len(stores_list), num_orders)
+        user_indices = np.random.randint(0, len(users_list), num_orders)
+        
+        order_id = 1
+        detail_id = 1
+        progress_step = max(1, num_orders // 20)
+        
+        start_date = f'-{time_span_days}d'
+        end_date = 'now'
+        
+        # 【性能优化】预生成所有订单时间和随机数
+        now = datetime.now()
+        time_deltas = np.random.randint(0, time_span_days * 24 * 3600, num_orders)
+        order_times = [now - timedelta(seconds=int(delta)) for delta in time_deltas]
+        
+        order_status_choices = np.random.choice(order_statuses, size=num_orders, p=status_weights)
+        payment_method_choices = np.random.choice(payment_methods, size=num_orders)
+        discount_flags = np.random.random(num_orders) < 0.3
+        discount_rates = np.random.uniform(0, 0.15, num_orders)
+        shipping_fees = np.random.uniform(5, 15, num_orders)
+        update_days = np.random.randint(0, 8, num_orders)
+        
+        for i in range(num_orders):
+            store = stores_list[store_indices[i]]
+            user = users_list[user_indices[i]]
+            
+            store_products = store_products_map.get(store['店铺ID'])
+            if store_products is None or len(store_products) == 0:
+                continue
+            
+            order_time = order_times[i]
+            order_status = order_status_choices[i]
+            
+            num_items = random.randint(1, min(3, len(store_products)))
+            product_indices = np.random.choice(len(store_products), size=num_items, replace=False)
+            selected_products = store_products.iloc[product_indices]
+            
+            total_amount = 0
+            total_cost = 0
+            
+            # 使用 itertuples 代替 iterrows（快 10 倍）
+            for product in selected_products.itertuples():
+                quantity = random.randint(1, 3)
+                item_amount = product.售价 * quantity
+                item_cost = product.成本 * quantity
+                
+                total_amount += item_amount
+                total_cost += item_cost
+                
+                order_details.append([
+                    f'OD{detail_id:08d}',
+                    f'O{order_id:08d}',
+                    product.商品ID,
+                    quantity,
+                    product.售价,
+                    round(item_amount, 2)
+                ])
+                detail_id += 1
+            
+            discount = round(total_amount * discount_rates[i], 2) if discount_flags[i] else 0
+            shipping_fee = 0 if total_amount > 99 else round(shipping_fees[i], 2)
+            final_amount = round(total_amount - discount + shipping_fee, 2)
+            
+            orders.append([
+                f'O{order_id:08d}',
+                user['用户ID'],
+                store['店铺ID'],
+                store['平台'],
+                order_time,
+                order_status,
+                round(total_amount, 2),
+                discount,
+                shipping_fee,
+                final_amount if order_status == '已完成' else 0,
+                round(total_cost, 2) if order_status == '已完成' else 0,
+                payment_method_choices[i],
+                order_time,
+                order_time + timedelta(days=int(update_days[i]))
+            ])
+            
+            order_id += 1
+            
+            if i > 0 and i % progress_step == 0:
+                progress = int((i / num_orders) * 100)
+                print(f"   进度: {progress}% ({i:,}/{num_orders:,})")
+                sys.stdout.flush()
+        
+        print(f"   进度: 100% ({num_orders:,}/{num_orders:,})")
+        sys.stdout.flush()
+    
+    print("   正在创建DataFrame...")
     sys.stdout.flush()
     
     # 使用列表创建DataFrame（比字典快很多）
+    # 优化：指定数据类型以减少内存占用
     orders_df = pd.DataFrame(orders, columns=[
         '订单ID', '用户ID', '店铺ID', '平台', '下单时间', '订单状态',
         '商品总额', '优惠金额', '运费', '实付金额', '成本总额', 
         '支付方式', '创建时间', '更新时间'
     ])
     
+    # 优化数据类型以减少内存
+    orders_df['订单ID'] = orders_df['订单ID'].astype('string')
+    orders_df['用户ID'] = orders_df['用户ID'].astype('string')
+    orders_df['店铺ID'] = orders_df['店铺ID'].astype('string')
+    orders_df['平台'] = orders_df['平台'].astype('category')
+    orders_df['订单状态'] = orders_df['订单状态'].astype('category')
+    orders_df['支付方式'] = orders_df['支付方式'].astype('category')
+    
     order_details_df = pd.DataFrame(order_details, columns=[
         '订单明细ID', '订单ID', '商品ID', '数量', '单价', '金额'
     ])
     
+    # 优化数据类型
+    order_details_df['订单明细ID'] = order_details_df['订单明细ID'].astype('string')
+    order_details_df['订单ID'] = order_details_df['订单ID'].astype('string')
+    order_details_df['商品ID'] = order_details_df['商品ID'].astype('string')
+    
+    print(f"   ✓ DataFrame创建完成（内存优化）")
+    sys.stdout.flush()
+    
     return orders_df, order_details_df
 
 # 生成推广数据（优化版 - 批量生成）
-def generate_promotion(stores_df, products_df):
-    """生成推广投放数据"""
+def generate_promotion(stores_df, products_df, time_span_days=365):
+    """
+    生成推广投放数据
+    time_span_days: 时间跨度（天）
+    """
     promotions = []
     promo_id = 1
     channels = ['直通车', '钻展', '超级推荐', '品牌广告']
@@ -323,8 +569,8 @@ def generate_promotion(stores_df, products_df):
     for store_id in stores_df['店铺ID'].unique():
         store_products_map[store_id] = products_df[products_df['店铺ID'] == store_id]
     
-    # 预生成日期列表
-    dates = [datetime.now().date() - timedelta(days=i) for i in range(30)]
+    # 预生成日期列表（根据时间跨度）
+    dates = [datetime.now().date() - timedelta(days=i) for i in range(min(time_span_days, 90))]  # 最多90天推广数据
     
     for _, store in stores_df.iterrows():
         store_id = store['店铺ID']
@@ -361,12 +607,15 @@ def generate_promotion(stores_df, products_df):
 
 
 # 生成流量数据（优化版 - 批量生成）
-def generate_traffic(stores_df):
-    """生成店铺流量数据"""
+def generate_traffic(stores_df, time_span_days=365):
+    """
+    生成店铺流量数据
+    time_span_days: 时间跨度（天）
+    """
     traffic = []
     
-    # 预生成日期列表
-    dates = [datetime.now().date() - timedelta(days=i) for i in range(30)]
+    # 预生成日期列表（根据时间跨度，最多90天）
+    dates = [datetime.now().date() - timedelta(days=i) for i in range(min(time_span_days, 90))]
     
     # 平台流量基数映射
     platform_uv_ranges = {
@@ -407,8 +656,11 @@ def generate_traffic(stores_df):
 
 
 # 生成库存变动数据（优化版 - 批量生成）
-def generate_inventory(products_df):
-    """生成库存变动记录"""
+def generate_inventory(products_df, time_span_days=365):
+    """
+    生成库存变动记录
+    time_span_days: 时间跨度（天）
+    """
     inventory = []
     inv_id = 1
     
@@ -416,8 +668,8 @@ def generate_inventory(products_df):
     sample_size = min(len(products_df), 200)
     sample_products = products_df.sample(sample_size)
     
-    # 预生成常量
-    dates = [datetime.now().date() - timedelta(days=i) for i in range(15)]
+    # 预生成常量（根据时间跨度，最多30天）
+    dates = [datetime.now().date() - timedelta(days=i) for i in range(min(time_span_days, 30))]
     change_types = ['入库', '出库', '出库']
     remarks = ['正常销售', '补货', '退货', '盘点调整']
     
@@ -468,66 +720,135 @@ def main():
         '抖音': ['抖音旗舰店1号', '抖音旗舰店2号', '抖音旗舰店3号', '抖音旗舰店4号'],
         '拼多多': ['拼多多旗舰店1号', '拼多多旗舰店2号', '拼多多旗舰店3号', '拼多多旗舰店4号']
     })
-    num_users = config.get('numUsers', 3000)
+    
+    # 新逻辑：只需要订单数和时间跨度
     num_orders = config.get('numOrders', 20000)
+    time_span_days = config.get('timeSpanDays', 365)  # 默认1年
+    
+    # 根据订单数自动计算用户数（平均每个用户下单3-5次）
+    avg_orders_per_user = 4
+    num_users = max(100, int(num_orders / avg_orders_per_user))
+    
     main_category = config.get('mainCategory', 'bicycle')
     
     # 获取类目配置
     category_config = CATEGORY_CONFIGS.get(main_category, CATEGORY_CONFIGS['bicycle'])
     
-    print("开始生成数据...")
+    print("="*60)
+    print("数据生成配置")
+    print("="*60)
     print(f"主营类目: {category_config['name']}")
-    print(f"配置: {len(platform_stores)} 个平台, {sum(len(v) for v in platform_stores.values())} 家店铺")
+    print(f"平台店铺: {len(platform_stores)} 个平台, {sum(len(v) for v in platform_stores.values())} 家店铺")
+    print(f"订单数量: {num_orders:,} 条")
+    print(f"时间跨度: {time_span_days} 天")
+    print(f"用户数量: {num_users:,} 个（自动计算）")
+    print("="*60)
+    sys.stdout.flush()
     
     # 生成各类数据
-    print("1. 生成店铺数据...")
+    print("\n1. 生成店铺数据...")
     stores_df = generate_stores(platform_stores)
     stores_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_stores.csv'), index=False, encoding='utf-8-sig')
-    print(f"   生成 {len(stores_df)} 条店铺数据")
+    print(f"   ✓ 生成 {len(stores_df)} 条店铺数据")
+    sys.stdout.flush()
     
-    print("2. 生成商品数据...")
+    print("\n2. 生成商品数据...")
     products_df = generate_products(stores_df, category_config)
     products_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_products.csv'), index=False, encoding='utf-8-sig')
-    print(f"   生成 {len(products_df)} 条商品数据")
+    print(f"   ✓ 生成 {len(products_df)} 条商品数据")
+    sys.stdout.flush()
     
-    print("3. 生成用户数据...")
-    users_df = generate_users(num_users)
+    print(f"\n3. 生成用户数据（{num_users:,} 个）...")
+    users_df = generate_users(num_users, time_span_days)
     print("   保存用户数据到CSV...")
-    users_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_users.csv'), index=False, encoding='utf-8-sig')
-    print(f"   ✓ 生成 {len(users_df)} 条用户数据")
+    # 优化：使用压缩和更快的写入方式
+    users_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_users.csv'), index=False, encoding='utf-8-sig', chunksize=50000)
+    print(f"   ✓ 生成 {len(users_df):,} 条用户数据")
     sys.stdout.flush()
     
-    print("4. 生成订单数据...")
-    orders_df, order_details_df = generate_orders(stores_df, products_df, users_df, num_orders)
-    print("   保存订单数据到CSV...")
-    orders_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_orders.csv'), index=False, encoding='utf-8-sig')
-    print("   保存订单明细数据到CSV...")
-    order_details_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_order_details.csv'), index=False, encoding='utf-8-sig')
-    print(f"   ✓ 生成 {len(orders_df)} 条订单数据")
-    print(f"   ✓ 生成 {len(order_details_df)} 条订单明细数据")
-    sys.stdout.flush()
+    print(f"\n4. 生成订单数据（{num_orders:,} 条）...")
+    orders_df, order_details_df = generate_orders(stores_df, products_df, users_df, num_orders, time_span_days)
     
-    print("5. 生成推广数据...")
-    promotion_df = generate_promotion(stores_df, products_df)
+    # 暂时禁用直接写入模式，使用 CSV 方式（更稳定）
+    use_direct_db = False
+    
+    if False:  # 预留代码，暂不启用
+        print("   检测到大数据量，将跳过 CSV 直接写入数据库...")
+        print(f"   ✓ 生成 {len(orders_df):,} 条订单数据（内存中）")
+        print(f"   ✓ 生成 {len(order_details_df):,} 条订单明细数据（内存中）")
+        sys.stdout.flush()
+    else:
+        print("   保存订单数据到CSV...")
+        orders_path = os.path.join(DATA_DIR, 'ods/ods_orders.csv')
+        
+        # 使用原生 CSV writer
+        with open(orders_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            writer.writerow(orders_df.columns)
+            writer.writerows(orders_df.values)
+        
+        print("   保存订单明细数据到CSV...")
+        order_details_path = os.path.join(DATA_DIR, 'ods/ods_order_details.csv')
+        
+        with open(order_details_path, 'w', newline='', encoding='utf-8-sig') as f:
+            writer = csv.writer(f)
+            writer.writerow(order_details_df.columns)
+            writer.writerows(order_details_df.values)
+        
+        print(f"   ✓ 生成 {len(orders_df):,} 条订单数据")
+        print(f"   ✓ 生成 {len(order_details_df):,} 条订单明细数据")
+        sys.stdout.flush()
+    
+    print("\n5. 生成推广数据...")
+    promotion_df = generate_promotion(stores_df, products_df, time_span_days)
     promotion_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_promotion.csv'), index=False, encoding='utf-8-sig')
-    print(f"   ✓ 生成 {len(promotion_df)} 条推广数据")
+    print(f"   ✓ 生成 {len(promotion_df):,} 条推广数据")
     sys.stdout.flush()
     
-    print("6. 生成流量数据...")
-    traffic_df = generate_traffic(stores_df)
+    print("\n6. 生成流量数据...")
+    traffic_df = generate_traffic(stores_df, time_span_days)
     traffic_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_traffic.csv'), index=False, encoding='utf-8-sig')
-    print(f"   ✓ 生成 {len(traffic_df)} 条流量数据")
+    print(f"   ✓ 生成 {len(traffic_df):,} 条流量数据")
     sys.stdout.flush()
     
-    print("7. 生成库存数据...")
-    inventory_df = generate_inventory(products_df)
+    print("\n7. 生成库存数据...")
+    inventory_df = generate_inventory(products_df, time_span_days)
     inventory_df.to_csv(os.path.join(DATA_DIR, 'ods/ods_inventory.csv'), index=False, encoding='utf-8-sig')
-    print(f"   ✓ 生成 {len(inventory_df)} 条库存数据")
+    print(f"   ✓ 生成 {len(inventory_df):,} 条库存数据")
     sys.stdout.flush()
     
-    print("\n✓ 数据生成完成！")
-    print(f"数据保存在: {os.path.join(DATA_DIR, 'ods/')}")
+    print("\n" + "="*60)
+    print("✓ 数据生成完成！")
+    print("="*60)
+    print(f"数据保存位置: {os.path.join(DATA_DIR, 'ods/')}")
+    print(f"总订单数: {num_orders:,} 条")
+    print(f"总用户数: {num_users:,} 个")
+    print(f"时间跨度: {time_span_days} 天")
+    print("="*60)
     sys.stdout.flush()
+    
+    # 直接从内存导入数据库（高速模式）
+    db_config = config.get('dbConfig')
+    if db_config:
+        print("\n正在从内存直接导入数据库（高速模式）...")
+        sys.stdout.flush()
+        
+        from load_to_database import load_dataframes_to_db
+        
+        dataframes = {
+            'stores': stores_df,
+            'products': products_df,
+            'users': users_df,
+            'orders': orders_df,
+            'order_details': order_details_df,
+            'promotion': promotion_df,
+            'traffic': traffic_df,
+            'inventory': inventory_df
+        }
+        
+        load_dataframes_to_db(dataframes, mode='full', db_config=db_config)
+    
+
 
 if __name__ == '__main__':
     main()

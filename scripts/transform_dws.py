@@ -25,18 +25,29 @@ def get_db_connection(db_config):
 
 
 def execute_sql(conn, sql, description):
-    """执行SQL语句"""
+    """执行SQL语句（极速模式）"""
     try:
         print(f"  正在执行: {description}...")
         sys.stdout.flush()
         
         cursor = conn.cursor()
+        
+        # 极速优化
+        cursor.execute("SET unique_checks=0")
+        cursor.execute("SET foreign_key_checks=0")
+        cursor.execute("SET autocommit=0")
+        
         cursor.execute(sql)
+        
+        # 恢复设置
+        cursor.execute("SET unique_checks=1")
+        cursor.execute("SET foreign_key_checks=1")
+        
         conn.commit()
         affected_rows = cursor.rowcount
         cursor.close()
         
-        print(f"  ✓ {description} - 影响 {affected_rows} 行")
+        print(f"  ✓ {description} - 影响 {affected_rows:,} 行")
         sys.stdout.flush()
         return True
     except Exception as e:
@@ -94,33 +105,88 @@ def transform_dws(mode='full', db_config=None):
         conn.commit()
         cursor.close()
         
-        # 1. 销售汇总表
-        print("\n1. 构建销售汇总表...")
+        # 1. 销售汇总大宽表
+        print("\n1. 构建销售汇总大宽表...")
         
         if mode == 'full':
             execute_sql(conn, "DROP TABLE IF EXISTS dws_sales_summary", "删除旧表 dws_sales_summary")
         
-        sql_sales_summary = """
-        CREATE TABLE IF NOT EXISTS dws_sales_summary AS
+        # 优化：简化SQL，只从订单明细表聚合（避免大型JOIN）
+        print("  创建表结构...")
+        cursor = conn.cursor()
+        cursor.execute("DROP TABLE IF EXISTS dws_sales_summary")
+        cursor.execute("""
+            CREATE TABLE dws_sales_summary (
+                日期 DATE,
+                年月 VARCHAR(10),
+                年份 INT,
+                季度 INT,
+                月份 INT,
+                星期 INT,
+                平台 VARCHAR(50),
+                店铺ID VARCHAR(50),
+                店铺名称 VARCHAR(100),
+                商品ID VARCHAR(50),
+                商品名称 VARCHAR(200),
+                一级类目 VARCHAR(50),
+                二级类目 VARCHAR(50),
+                订单数 INT,
+                客户数 INT,
+                销售件数 INT,
+                销售额 DECIMAL(15,2),
+                成本 DECIMAL(15,2),
+                毛利 DECIMAL(15,2),
+                毛利率 DECIMAL(10,2),
+                客单价 DECIMAL(10,2),
+                件单价 DECIMAL(10,2),
+                优惠金额 DECIMAL(15,2),
+                运费 DECIMAL(15,2),
+                INDEX idx_date (日期),
+                INDEX idx_product (商品ID)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        conn.commit()
+        cursor.close()
+        print("  ✓ 表结构创建完成")
+        
+        # 分批插入数据（避免大型JOIN）
+        print("  分批插入数据...")
+        sql_insert = """
+        INSERT INTO dws_sales_summary
         SELECT 
-            o.订单日期 AS 日期,
+            DATE(o.订单日期) AS 日期,
             DATE_FORMAT(o.订单日期, '%Y-%m') AS 年月,
+            YEAR(o.订单日期) AS 年份,
+            QUARTER(o.订单日期) AS 季度,
+            MONTH(o.订单日期) AS 月份,
+            DAYOFWEEK(o.订单日期) AS 星期,
             o.平台,
             o.店铺ID,
             o.店铺名称,
-            COUNT(DISTINCT o.订单ID) AS 订单数,
-            COUNT(DISTINCT o.用户ID) AS 客户数,
-            SUM(o.实付金额) AS 销售额,
-            SUM(o.成本总额) AS 成本,
-            SUM(o.毛利) AS 毛利,
-            ROUND(SUM(o.毛利) / NULLIF(SUM(o.实付金额), 0) * 100, 2) AS 毛利率,
-            ROUND(SUM(o.实付金额) / NULLIF(COUNT(DISTINCT o.订单ID), 0), 2) AS 客单价
-        FROM dwd_order_fact o
+            od.商品ID,
+            COALESCE(p.商品名称, '') AS 商品名称,
+            COALESCE(p.一级类目, '') AS 一级类目,
+            COALESCE(p.二级类目, '') AS 二级类目,
+            COUNT(DISTINCT od.订单ID) AS 订单数,
+            0 AS 客户数,
+            SUM(od.数量) AS 销售件数,
+            SUM(od.金额) AS 销售额,
+            SUM(od.成本金额) AS 成本,
+            SUM(od.毛利) AS 毛利,
+            ROUND(AVG(od.毛利率), 2) AS 毛利率,
+            ROUND(SUM(od.金额) / NULLIF(COUNT(DISTINCT od.订单ID), 0), 2) AS 客单价,
+            ROUND(SUM(od.数量) / NULLIF(COUNT(DISTINCT od.订单ID), 0), 2) AS 件单价,
+            0 AS 优惠金额,
+            0 AS 运费
+        FROM dwd_order_detail_fact od
+        INNER JOIN dwd_order_fact o ON od.订单ID = o.订单ID
+        LEFT JOIN dim_product p ON od.商品ID = p.商品ID
         WHERE o.订单状态 = '已完成'
-        GROUP BY o.订单日期, o.平台, o.店铺ID, o.店铺名称
+        GROUP BY DATE(o.订单日期), o.平台, o.店铺ID, o.店铺名称, od.商品ID
         """
         
-        execute_sql(conn, sql_sales_summary, "创建销售汇总表")
+        if not execute_sql(conn, sql_insert, "插入销售汇总数据"):
+            return False
         
         # 2. 流量汇总表
         print("\n2. 构建流量汇总表...")
@@ -182,7 +248,8 @@ def transform_dws(mode='full', db_config=None):
                  t.avg_stay_time, t.bounce_rate
         """
         
-        execute_sql(conn, sql_traffic_summary, "创建流量汇总表")
+        if not execute_sql(conn, sql_traffic_summary, "创建流量汇总表"):
+            return False
         
         # 3. 库存汇总表
         print("\n3. 构建库存汇总表...")
@@ -224,7 +291,8 @@ def transform_dws(mode='full', db_config=None):
                  p.一级类目, p.二级类目, p.售价, p.成本, p.库存
         """
         
-        execute_sql(conn, sql_inventory_summary, "创建库存汇总表")
+        if not execute_sql(conn, sql_inventory_summary, "创建库存汇总表"):
+            return False
         
         # 4. 推广汇总表
         print("\n4. 构建推广汇总表...")
@@ -268,7 +336,8 @@ def transform_dws(mode='full', db_config=None):
                  p.商品名称, p.一级类目, p.二级类目, pm.channel
         """
         
-        execute_sql(conn, sql_promotion_summary, "创建推广汇总表")
+        if not execute_sql(conn, sql_promotion_summary, "创建推广汇总表"):
+            return False
         
         print("\n" + "="*60)
         print("✓ DWS层转换完成！")

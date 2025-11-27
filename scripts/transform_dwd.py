@@ -25,18 +25,29 @@ def get_db_connection(db_config):
 
 
 def execute_sql(conn, sql, description):
-    """执行SQL语句"""
+    """执行SQL语句（极速模式）"""
     try:
         print(f"  正在执行: {description}...")
         sys.stdout.flush()
         
         cursor = conn.cursor()
+        
+        # 极速优化
+        cursor.execute("SET unique_checks=0")
+        cursor.execute("SET foreign_key_checks=0")
+        cursor.execute("SET autocommit=0")
+        
         cursor.execute(sql)
+        
+        # 恢复设置
+        cursor.execute("SET unique_checks=1")
+        cursor.execute("SET foreign_key_checks=1")
+        
         conn.commit()
         affected_rows = cursor.rowcount
         cursor.close()
         
-        print(f"  ✓ {description} - 影响 {affected_rows} 行")
+        print(f"  ✓ {description} - 影响 {affected_rows:,} 行")
         sys.stdout.flush()
         return True
     except Exception as e:
@@ -67,7 +78,9 @@ def transform_dwd(mode='full', db_config=None):
             execute_sql(conn, "DROP TABLE IF EXISTS dwd_order_fact", "删除旧表 dwd_order_fact")
         
         sql_order_fact = """
-        CREATE TABLE IF NOT EXISTS dwd_order_fact AS
+        CREATE TABLE IF NOT EXISTS dwd_order_fact
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        AS
         SELECT 
             o.order_id AS 订单ID,
             o.user_id AS 用户ID,
@@ -75,6 +88,9 @@ def transform_dwd(mode='full', db_config=None):
             o.platform AS 平台,
             o.order_time AS 下单时间,
             o.order_status AS 订单状态,
+            COALESCE(o.total_amount, 0) AS 商品总额,
+            COALESCE(o.discount_amount, 0) AS 优惠金额,
+            COALESCE(o.shipping_fee, 0) AS 运费,
             o.final_amount AS 实付金额,
             COALESCE(o.total_cost, 0) AS 成本总额,
             (o.final_amount - COALESCE(o.total_cost, 0)) AS 毛利,
@@ -82,16 +98,18 @@ def transform_dwd(mode='full', db_config=None):
                 WHEN o.final_amount > 0 THEN ROUND((o.final_amount - COALESCE(o.total_cost, 0)) / o.final_amount * 100, 2)
                 ELSE 0
             END AS 毛利率,
-            u.gender AS 性别,
-            u.age AS 年龄,
+            COALESCE(o.payment_method, '') AS 支付方式,
+            u.user_name AS 用户名,
+            u.gender AS 用户性别,
+            u.age AS 用户年龄,
             CASE 
                 WHEN u.age <= 25 THEN '18-25岁'
                 WHEN u.age <= 35 THEN '26-35岁'
                 WHEN u.age <= 45 THEN '36-45岁'
                 WHEN u.age <= 55 THEN '46-55岁'
                 ELSE '55岁以上'
-            END AS 年龄段,
-            u.city AS 城市,
+            END AS 用户年龄段,
+            u.city AS 用户城市,
             s.store_name AS 店铺名称,
             DATE(o.order_time) AS 订单日期,
             YEAR(o.order_time) AS 年,
@@ -105,7 +123,8 @@ def transform_dwd(mode='full', db_config=None):
         LEFT JOIN ods_stores s ON o.store_id = s.store_id
         """
         
-        execute_sql(conn, sql_order_fact, "创建订单事实表")
+        if not execute_sql(conn, sql_order_fact, "创建订单事实表"):
+            return False
         
         # 2. 构建订单明细事实表
         print("\n2. 构建订单明细事实表...")
@@ -114,7 +133,9 @@ def transform_dwd(mode='full', db_config=None):
             execute_sql(conn, "DROP TABLE IF EXISTS dwd_order_detail_fact", "删除旧表 dwd_order_detail_fact")
         
         sql_order_detail_fact = """
-        CREATE TABLE IF NOT EXISTS dwd_order_detail_fact AS
+        CREATE TABLE IF NOT EXISTS dwd_order_detail_fact
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        AS
         SELECT 
             od.order_detail_id AS 订单明细ID,
             od.order_id AS 订单ID,
@@ -136,7 +157,8 @@ def transform_dwd(mode='full', db_config=None):
         LEFT JOIN ods_products p ON od.product_id = p.product_id
         """
         
-        execute_sql(conn, sql_order_detail_fact, "创建订单明细事实表")
+        if not execute_sql(conn, sql_order_detail_fact, "创建订单明细事实表"):
+            return False
         
         # 3. 构建商品维度表
         print("\n3. 构建商品维度表...")
@@ -166,7 +188,8 @@ def transform_dwd(mode='full', db_config=None):
         LEFT JOIN ods_stores s ON p.store_id = s.store_id
         """
         
-        execute_sql(conn, sql_dim_product, "创建商品维度表")
+        if not execute_sql(conn, sql_dim_product, "创建商品维度表"):
+            return False
         
         # 4. 构建店铺维度表
         print("\n4. 构建店铺维度表...")
@@ -184,7 +207,8 @@ def transform_dwd(mode='full', db_config=None):
         FROM ods_stores
         """
         
-        execute_sql(conn, sql_dim_store, "创建店铺维度表")
+        if not execute_sql(conn, sql_dim_store, "创建店铺维度表"):
+            return False
         
         # 5. 构建用户维度表
         print("\n5. 构建用户维度表...")
@@ -211,7 +235,8 @@ def transform_dwd(mode='full', db_config=None):
         FROM ods_users
         """
         
-        execute_sql(conn, sql_dim_user, "创建用户维度表")
+        if not execute_sql(conn, sql_dim_user, "创建用户维度表"):
+            return False
         
         print("\n" + "="*60)
         print("✓ DWD层转换完成！")
