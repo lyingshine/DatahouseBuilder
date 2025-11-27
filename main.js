@@ -333,3 +333,33 @@ ipcMain.handle('load-db-config', async () => {
     };
   }
 });
+
+// 测试数据库连接
+ipcMain.handle('test-db-connection', async (event, dbConfig) => {
+  return new Promise((resolve) => {
+    const scriptPath = path.join(__dirname, 'scripts/test_connection.py');
+    const testProcess = spawn('python', [scriptPath, JSON.stringify(dbConfig)], {
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+
+    let output = '';
+    
+    testProcess.stdout.on('data', (data) => {
+      output += data.toString('utf8');
+    });
+
+    testProcess.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true, connected: true });
+      } else {
+        resolve({ success: true, connected: false, message: output });
+      }
+    });
+
+    // 超时处理
+    setTimeout(() => {
+      testProcess.kill();
+      resolve({ success: true, connected: false, message: '连接超时' });
+    }, 5000);
+  });
+});

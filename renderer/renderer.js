@@ -28,28 +28,7 @@ function showDbConfig() {
   document.getElementById('db-config-dialog').style.display = 'flex';
 }
 
-// 保存数据库配置
-async function saveDbConfig() {
-  globalDbConfig = {
-    host: document.getElementById('global-db-host').value,
-    port: parseInt(document.getElementById('global-db-port').value),
-    database: document.getElementById('global-db-name').value,
-    user: document.getElementById('global-db-user').value,
-    password: document.getElementById('global-db-password').value
-  };
-  
-  try {
-    const result = await ipcRenderer.invoke('save-db-config', globalDbConfig);
-    if (result.success) {
-      closeDialog('db-config-dialog');
-      showToast('数据库配置已保存', 'success');
-    } else {
-      showToast(`保存失败: ${result.message}`, 'error');
-    }
-  } catch (error) {
-    showToast(`保存失败: ${error.message}`, 'error');
-  }
-}
+
 
 // 获取数据库配置
 function getDbConfig() {
@@ -593,6 +572,56 @@ document.getElementById('close-btn').addEventListener('click', () => {
   ipcRenderer.send('window-close');
 });
 
+// 更新数据库连接状态
+async function updateDbStatus() {
+  const statusDot = document.getElementById('db-status-dot');
+  const statusText = document.getElementById('db-status-text');
+  
+  // 设置检测中状态
+  statusDot.className = 'db-status-dot checking';
+  statusText.textContent = '检测中...';
+  
+  try {
+    const result = await ipcRenderer.invoke('test-db-connection', globalDbConfig);
+    
+    if (result.connected) {
+      statusDot.className = 'db-status-dot connected';
+      statusText.textContent = '已连接';
+    } else {
+      statusDot.className = 'db-status-dot disconnected';
+      statusText.textContent = '未连接';
+    }
+  } catch (error) {
+    statusDot.className = 'db-status-dot disconnected';
+    statusText.textContent = '连接失败';
+  }
+}
+
+// 保存数据库配置
+async function saveDbConfig() {
+  globalDbConfig = {
+    host: document.getElementById('global-db-host').value,
+    port: parseInt(document.getElementById('global-db-port').value),
+    database: document.getElementById('global-db-name').value,
+    user: document.getElementById('global-db-user').value,
+    password: document.getElementById('global-db-password').value
+  };
+  
+  try {
+    const result = await ipcRenderer.invoke('save-db-config', globalDbConfig);
+    if (result.success) {
+      closeDialog('db-config-dialog');
+      showToast('数据库配置已保存', 'success');
+      // 保存后立即测试连接
+      updateDbStatus();
+    } else {
+      showToast(`保存失败: ${result.message}`, 'error');
+    }
+  } catch (error) {
+    showToast(`保存失败: ${error.message}`, 'error');
+  }
+}
+
 // 初始化
 document.addEventListener('DOMContentLoaded', async () => {
   // 加载数据库配置
@@ -600,12 +629,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const result = await ipcRenderer.invoke('load-db-config');
     if (result.success && result.config) {
       globalDbConfig = result.config;
+      // 加载配置后测试连接
+      updateDbStatus();
     }
   } catch (error) {
     console.error('加载数据库配置失败:', error);
   }
   
   showToast('电商数仓配置器已启动', 'success');
+  
+  // 每30秒自动检测一次连接状态
+  setInterval(updateDbStatus, 30000);
 });
 
 

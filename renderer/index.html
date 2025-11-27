@@ -26,6 +26,10 @@
           <path d="M2 4h10M5 4V3a1 1 0 011-1h2a1 1 0 011 1v1M3 4v8a1 1 0 001 1h6a1 1 0 001-1V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
       </button>
+      <div class="db-status" id="db-status" onclick="showDbConfig()" title="点击配置数据库">
+        <span class="db-status-dot" id="db-status-dot"></span>
+        <span class="db-status-text" id="db-status-text">未连接</span>
+      </div>
     </div>
     <div class="titlebar-controls">
       <button class="titlebar-button" id="minimize-btn" title="最小化">
