@@ -40,7 +40,7 @@ def clear_local_data():
 
 
 def clear_database_tables(db_config):
-    """清空数据库表"""
+    """清空数据库表（仅删除程序生成的表）"""
     print("\n清空数据库表...")
     
     try:
@@ -58,21 +58,36 @@ def clear_database_tables(db_config):
         
         # 获取所有表
         cursor.execute("SHOW TABLES")
-        tables = [table[0] for table in cursor.fetchall()]
+        all_tables = [table[0] for table in cursor.fetchall()]
         
-        if not tables:
+        if not all_tables:
             print("  数据库中没有表")
             cursor.close()
             conn.close()
             return True
         
-        print(f"  找到 {len(tables)} 张表")
+        # 只删除程序生成的表（ods_*, dwd_*, dws_*, dim_*）
+        program_tables = [
+            table for table in all_tables 
+            if table.startswith('ods_') or 
+               table.startswith('dwd_') or 
+               table.startswith('dws_') or 
+               table.startswith('dim_')
+        ]
+        
+        if not program_tables:
+            print("  没有找到程序生成的表")
+            cursor.close()
+            conn.close()
+            return True
+        
+        print(f"  找到 {len(program_tables)} 张程序生成的表")
         
         # 临时禁用外键检查
         cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
         
         total_deleted = 0
-        for table in tables:
+        for table in program_tables:
             try:
                 cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
                 print(f"  ✓ 删除表: {table}")
@@ -88,6 +103,7 @@ def clear_database_tables(db_config):
         conn.close()
         
         print(f"\n数据库清空完成，共删除 {total_deleted} 张表")
+        print(f"  保留了 {len(all_tables) - len(program_tables)} 张其他表")
         return True
         
     except pymysql.Error as e:
