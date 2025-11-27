@@ -53,6 +53,30 @@ def transform_dws(mode='full', db_config=None):
         return False
     
     try:
+        # 创建索引以加速查询
+        print("\n创建索引...")
+        cursor = conn.cursor()
+        
+        # 为 dwd_order_fact 创建索引
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_date ON dwd_order_fact(订单日期)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_status ON dwd_order_fact(订单状态)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_order_store ON dwd_order_fact(店铺ID)")
+            print("✓ dwd_order_fact 索引创建完成")
+        except:
+            pass
+        
+        # 为 dwd_order_detail_fact 创建索引
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_detail_order ON dwd_order_detail_fact(订单ID)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_detail_product ON dwd_order_detail_fact(商品ID)")
+            print("✓ dwd_order_detail_fact 索引创建完成")
+        except:
+            pass
+        
+        conn.commit()
+        cursor.close()
+        
         # 1. 销售汇总表
         print("\n1. 构建销售汇总表...")
         
@@ -63,37 +87,20 @@ def transform_dws(mode='full', db_config=None):
         CREATE TABLE IF NOT EXISTS dws_sales_summary AS
         SELECT 
             o.订单日期 AS 日期,
-            o.年月,
+            DATE_FORMAT(o.订单日期, '%Y-%m') AS 年月,
             o.平台,
             o.店铺ID,
             o.店铺名称,
-            COALESCE(od.一级类目, '未分类') AS 一级类目,
-            COALESCE(od.二级类目, '未分类') AS 二级类目,
             COUNT(DISTINCT o.订单ID) AS 订单数,
             COUNT(DISTINCT o.用户ID) AS 客户数,
-            COALESCE(SUM(o.实付金额), 0) AS 销售额,
-            COALESCE(SUM(o.成本总额), 0) AS 成本,
-            COALESCE(SUM(o.毛利), 0) AS 毛利,
-            CASE 
-                WHEN SUM(o.实付金额) > 0 THEN ROUND(SUM(o.毛利) / SUM(o.实付金额) * 100, 2)
-                ELSE 0
-            END AS 毛利率,
-            CASE 
-                WHEN COUNT(DISTINCT o.订单ID) > 0 THEN ROUND(SUM(o.实付金额) / COUNT(DISTINCT o.订单ID), 2)
-                ELSE 0
-            END AS 客单价,
-            CASE 
-                WHEN COUNT(DISTINCT o.用户ID) > 0 THEN ROUND(SUM(o.实付金额) / COUNT(DISTINCT o.用户ID), 2)
-                ELSE 0
-            END AS 人均消费,
-            CASE 
-                WHEN SUM(o.实付金额) > 0 THEN ROUND(SUM(o.成本总额) / SUM(o.实付金额) * 100, 2)
-                ELSE 0
-            END AS 成本率
+            SUM(o.实付金额) AS 销售额,
+            SUM(o.成本总额) AS 成本,
+            SUM(o.毛利) AS 毛利,
+            ROUND(SUM(o.毛利) / NULLIF(SUM(o.实付金额), 0) * 100, 2) AS 毛利率,
+            ROUND(SUM(o.实付金额) / NULLIF(COUNT(DISTINCT o.订单ID), 0), 2) AS 客单价
         FROM dwd_order_fact o
-        LEFT JOIN dwd_order_detail_fact od ON o.订单ID = od.订单ID
         WHERE o.订单状态 = '已完成'
-        GROUP BY o.订单日期, o.年月, o.平台, o.店铺ID, o.店铺名称, od.一级类目, od.二级类目
+        GROUP BY o.订单日期, o.平台, o.店铺ID, o.店铺名称
         """
         
         execute_sql(conn, sql_sales_summary, "创建销售汇总表")
