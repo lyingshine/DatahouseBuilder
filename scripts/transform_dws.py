@@ -6,14 +6,18 @@ import pymysql
 import sys
 import json
 
-# 从配置文件读取数据库配置
-from db_config import DB_CONFIG
 
-
-def get_db_connection():
+def get_db_connection(db_config):
     """获取数据库连接"""
     try:
-        conn = pymysql.connect(**DB_CONFIG)
+        conn = pymysql.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            charset='utf8mb4'
+        )
         return conn
     except Exception as e:
         print(f"数据库连接失败: {e}")
@@ -35,7 +39,7 @@ def execute_sql(conn, sql, description):
         return False
 
 
-def transform_dws(mode='full'):
+def transform_dws(mode='full', db_config=None):
     """
     转换DWS层数据
     mode: 'full' 全量模式（删除重建）, 'incremental' 增量模式（追加）
@@ -44,7 +48,7 @@ def transform_dws(mode='full'):
     print("DWS层数据转换")
     print("="*60)
     
-    conn = get_db_connection()
+    conn = get_db_connection(db_config)
     if not conn:
         return False
     
@@ -274,15 +278,20 @@ def main():
         except:
             pass
     
-    # 更新数据库配置
-    if 'dbConfig' in config:
-        DB_CONFIG.update(config['dbConfig'])
+    # 获取数据库配置
+    db_config = config.get('dbConfig', {
+        'host': 'localhost',
+        'port': 3306,
+        'database': 'datas',
+        'user': 'root',
+        'password': ''
+    })
     
     mode = config.get('mode', 'full')
     
     print(f"模式: {'全量（删除重建）' if mode == 'full' else '增量（追加数据）'}")
     
-    success = transform_dws(mode)
+    success = transform_dws(mode, db_config)
     
     if not success:
         sys.exit(1)
