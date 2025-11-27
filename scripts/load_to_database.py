@@ -13,9 +13,6 @@ from sqlalchemy import create_engine, text
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 
-# 从配置文件读取数据库配置
-from db_config import DB_CONFIG
-
 # 表结构映射（CSV列名 -> 数据库列名）
 COLUMN_MAPPING = {
     'ods_stores': {
@@ -107,22 +104,35 @@ COLUMN_MAPPING = {
 }
 
 
-def get_db_connection():
+def get_db_connection(db_config):
     """获取数据库连接"""
     try:
-        conn = pymysql.connect(**DB_CONFIG)
+        conn = pymysql.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            charset='utf8mb4'
+        )
         return conn
     except Exception as e:
         print(f"数据库连接失败: {e}")
         return None
 
 
-def create_database_if_not_exists():
+def create_database_if_not_exists(db_config):
     """创建数据库（如果不存在）"""
     try:
-        config = DB_CONFIG.copy()
+        config = db_config.copy()
         db_name = config.pop('database')
-        conn = pymysql.connect(**config)
+        conn = pymysql.connect(
+            host=config['host'],
+            port=config['port'],
+            user=config['user'],
+            password=config['password'],
+            charset='utf8mb4'
+        )
         cursor = conn.cursor()
         cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_name} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
         conn.commit()
@@ -135,11 +145,12 @@ def create_database_if_not_exists():
         return False
 
 
-def load_layer_to_db(layer, mode='full'):
+def load_layer_to_db(layer, mode='full', db_config=None):
     """
     加载指定层的数据到数据库
     layer: 'ods', 'dwd', 'dws'
     mode: 'full' 全量模式（删除重建）, 'incremental' 增量模式（追加）
+    db_config: 数据库配置
     """
     print(f"\n{'='*60}")
     print(f"开始加载 {layer.upper()} 层数据 - 模式: {mode}")
@@ -147,7 +158,7 @@ def load_layer_to_db(layer, mode='full'):
     
     # 创建数据库引擎
     engine = create_engine(
-        f"mysql+pymysql://{DB_CONFIG['user']}:{DB_CONFIG['password']}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}?charset=utf8mb4"
+        f"mysql+pymysql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}?charset=utf8mb4"
     )
     
     # 获取该层的所有CSV文件
@@ -216,23 +227,32 @@ def main():
         except:
             pass
     
+    # 获取数据库配置
+    db_config = config.get('dbConfig', {
+        'host': 'localhost',
+        'port': 3306,
+        'database': 'datas',
+        'user': 'root',
+        'password': ''
+    })
+    
     layer = config.get('layer', 'ods')
     mode = config.get('mode', 'full')
     
     print("="*60)
     print("数据库加载工具")
     print("="*60)
-    print(f"数据库: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
+    print(f"数据库: {db_config['host']}:{db_config['port']}/{db_config['database']}")
     print(f"层级: {layer.upper()}")
     print(f"模式: {'全量（删除重建）' if mode == 'full' else '增量（追加数据）'}")
     print("="*60)
     
     # 创建数据库
-    if not create_database_if_not_exists():
+    if not create_database_if_not_exists(db_config):
         return
     
     # 加载数据
-    success = load_layer_to_db(layer, mode)
+    success = load_layer_to_db(layer, mode, db_config)
     
     if success:
         print("\n✓ 数据加载完成！")
