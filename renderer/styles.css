@@ -1407,7 +1407,6 @@ body {
   border-radius: 50%;
   background: #71717a;
   transition: all 0.3s;
-  animation: pulse 2s infinite;
 }
 
 @keyframes pulse {
@@ -1422,11 +1421,11 @@ body {
 
 .db-status-dot.disconnected {
   background: #f56565;
-  animation: none;
 }
 
 .db-status-dot.checking {
   background: #ed8936;
+  animation: pulse 1.5s infinite;
 }
 
 .db-status-text {
