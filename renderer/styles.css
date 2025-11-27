@@ -261,24 +261,24 @@ body {
 /* 通知提示 */
 .toast-container {
   position: fixed;
-  top: 20px;
+  bottom: 20px;
   right: 20px;
   z-index: 2000;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 12px;
 }
 
 .toast {
   background: white;
   border-radius: 8px;
-  padding: 14px 18px;
+  padding: 12px 16px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-width: 280px;
-  max-width: 400px;
+  gap: 10px;
+  min-width: 240px;
+  max-width: 320px;
   opacity: 0;
   transform: translateX(400px);
   transition: all 0.3s ease;
@@ -290,12 +290,12 @@ body {
 }
 
 .toast-icon {
-  font-size: 20px;
+  font-size: 18px;
   flex-shrink: 0;
 }
 
 .toast-message {
-  font-size: 14px;
+  font-size: 13px;
   color: #2d3748;
   flex: 1;
 }
