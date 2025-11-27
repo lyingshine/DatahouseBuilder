@@ -1,0 +1,57 @@
+{
+  "name": "ecommerce-dw-tool",
+  "version": "1.0.0",
+  "description": "电商数仓配置器 - 现代化桌面应用",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false && set ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES=true && electron-builder --win --x64",
+    "build:dir": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --x64 --dir",
+    "build:portable": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win portable"
+  },
+  "keywords": ["electron", "data-warehouse", "ecommerce"],
+  "author": "DataWarehouse Team",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.ecommerce.dw.tool",
+    "productName": "电商数仓配置器",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "renderer/**/*",
+      "scripts/**/*.py",
+      "data/**/*",
+      "sql/**/*",
+      "数据库信息",
+      "requirements.txt",
+      "package.json",
+      "!scripts/__pycache__/**/*"
+    ],
+    "asarUnpack": [
+      "scripts/**/*.py",
+      "数据库信息"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "sign": null,
+      "verifyUpdateCodeSignature": false
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}"
+    }
+  }
+}

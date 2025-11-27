@@ -1,0 +1,741 @@
+const { ipcRenderer } = require('electron');
+
+// 平台列表
+const platforms = [
+  "天猫", "京东", "抖音", "拼多多", "淘宝", "快手",
+  "唯品会", "苏宁易购", "国美", "小红书", "得物", "闲鱼"
+];
+
+// 平台店铺配置
+let platformStores = {};
+
+// 初始化平台列表
+function initPlatformList() {
+  const container = document.getElementById('platform-list');
+  container.innerHTML = platforms.map(platform => `
+    <div class="platform-config-item">
+      <div class="platform-header">
+        <input type="checkbox" id="platform-${platform}" value="${platform}" onchange="togglePlatform('${platform}', this.checked)">
+        <label for="platform-${platform}">${platform}</label>
+        <div class="store-count-input">
+          <label>店铺数:</label>
+          <input type="number" id="count-${platform}" value="4" min="1" max="20" onchange="updateStoreCount('${platform}', this.value)" />
+        </div>
+      </div>
+      <div class="store-list" id="stores-${platform}" style="display: none;"></div>
+    </div>
+  `).join('');
+}
+
+// 切换平台选择
+function togglePlatform(platform, checked) {
+  const storeList = document.getElementById(`stores-${platform}`);
+  const countInput = document.getElementById(`count-${platform}`);
+  
+  if (checked) {
+    const count = parseInt(countInput.value) || 4;
+    platformStores[platform] = generateStoreNames(platform, count);
+    renderStoreList(platform);
+    storeList.style.display = 'block';
+  } else {
+    delete platformStores[platform];
+    storeList.style.display = 'none';
+  }
+}
+
+// 更新店铺数量
+function updateStoreCount(platform, count) {
+  const checkbox = document.getElementById(`platform-${platform}`);
+  if (!checkbox.checked) return;
+  
+  count = parseInt(count) || 4;
+  const currentStores = platformStores[platform] || [];
+  
+  if (count > currentStores.length) {
+    // 增加店铺
+    const newStores = generateStoreNames(platform, count - currentStores.length);
+    platformStores[platform] = [...currentStores, ...newStores];
+  } else if (count < currentStores.length) {
+    // 减少店铺
+    platformStores[platform] = currentStores.slice(0, count);
+  }
+  
+  renderStoreList(platform);
+}
+
+// 生成店铺名称
+function generateStoreNames(platform, count) {
+  const suffixes = ['旗舰店', '专卖店', '官方店', '直营店', '精品店', '体验店'];
+  const prefixes = ['', '官方', '正品', '品牌', '优选'];
+  const stores = [];
+  
+  for (let i = 0; i < count; i++) {
+    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+    const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
+    const num = i + 1;
+    stores.push(`${prefix}${platform}${suffix}${num}号`);
+  }
+  
+  return stores;
+}
+
+// 渲染店铺列表
+function renderStoreList(platform) {
+  const container = document.getElementById(`stores-${platform}`);
+  const stores = platformStores[platform] || [];
+  
+  container.innerHTML = `
+    <div class="store-list-header">
+      <span>店铺名称</span>
+      <button class="btn-small btn-secondary" onclick="regenerateStores('${platform}')">🔄 重新生成</button>
+    </div>
+    ${stores.map((store, idx) => `
+      <div class="store-item">
+        <span class="store-number">${idx + 1}</span>
+        <input type="text" class="store-name-input" value="${store}" onchange="updateStoreName('${platform}', ${idx}, this.value)" />
+      </div>
+    `).join('')}
+  `;
+}
+
+// 重新生成店铺名称
+function regenerateStores(platform) {
+  const count = platformStores[platform]?.length || 4;
+  platformStores[platform] = generateStoreNames(platform, count);
+  renderStoreList(platform);
+  showToast(`已重新生成${platform}的店铺名称`, 'success');
+}
+
+// 更新店铺名称
+function updateStoreName(platform, idx, name) {
+  if (platformStores[platform]) {
+    platformStores[platform][idx] = name;
+  }
+}
+
+// 显示ODS配置对话框
+function showOdsConfig() {
+  document.getElementById('ods-dialog').style.display = 'flex';
+}
+
+// 显示生成配置对话框
+function showGenerateConfig() {
+  closeDialog('ods-dialog');
+  initPlatformList();
+  document.getElementById('generate-dialog').style.display = 'flex';
+}
+
+// 显示导入配置对话框
+function showImportConfig() {
+  closeDialog('ods-dialog');
+  loadFieldRequirements();
+  document.getElementById('import-dialog').style.display = 'flex';
+}
+
+// 字段要求配置
+const defaultFieldRequirements = {
+  stores: [
+    { name: '店铺ID', type: 'string', required: true, example: 'S0001' },
+    { name: '店铺名称', type: 'string', required: true, example: '京东旗舰店1号' },
+    { name: '平台', type: 'string', required: true, example: '京东' },
+    { name: '开店日期', type: 'date', required: true, example: '2022-01-01' }
+  ],
+  products: [
+    { name: '商品ID', type: 'string', required: true, example: 'P000001' },
+    { name: '店铺ID', type: 'string', required: true, example: 'S0001' },
+    { name: '平台', type: 'string', required: true, example: '京东' },
+    { name: '商品名称', type: 'string', required: true, example: '公路车-轻量版' },
+    { name: '一级类目', type: 'string', required: true, example: '整车' },
+    { name: '二级类目', type: 'string', required: true, example: '公路车' },
+    { name: '售价', type: 'number', required: true, example: '2999.00' },
+    { name: '成本', type: 'number', required: true, example: '1800.00' },
+    { name: '库存', type: 'number', required: true, example: '100' }
+  ],
+  users: [
+    { name: '用户ID', type: 'string', required: true, example: 'U00000001' },
+    { name: '用户名', type: 'string', required: true, example: '张三' },
+    { name: '性别', type: 'string', required: true, example: '男' },
+    { name: '年龄', type: 'number', required: true, example: '28' },
+    { name: '城市', type: 'string', required: true, example: '北京' },
+    { name: '注册日期', type: 'date', required: false, example: '2023-01-01' }
+  ],
+  orders: [
+    { name: '订单ID', type: 'string', required: true, example: 'O00000001' },
+    { name: '用户ID', type: 'string', required: true, example: 'U00000001' },
+    { name: '店铺ID', type: 'string', required: true, example: 'S0001' },
+    { name: '平台', type: 'string', required: true, example: '京东' },
+    { name: '下单时间', type: 'datetime', required: true, example: '2024-01-01 10:30:00' },
+    { name: '订单状态', type: 'string', required: true, example: '已完成' },
+    { name: '商品总额', type: 'number', required: true, example: '2999.00' },
+    { name: '优惠金额', type: 'number', required: false, example: '100.00' },
+    { name: '运费', type: 'number', required: false, example: '0.00' },
+    { name: '实付金额', type: 'number', required: true, example: '2899.00' }
+  ],
+  order_details: [
+    { name: '订单明细ID', type: 'string', required: true, example: 'OD00000001' },
+    { name: '订单ID', type: 'string', required: true, example: 'O00000001' },
+    { name: '商品ID', type: 'string', required: true, example: 'P000001' },
+    { name: '数量', type: 'number', required: true, example: '1' },
+    { name: '单价', type: 'number', required: true, example: '2999.00' },
+    { name: '金额', type: 'number', required: true, example: '2999.00' }
+  ]
+};
+
+let currentFieldRequirements = JSON.parse(JSON.stringify(defaultFieldRequirements));
+
+// 加载字段要求
+function loadFieldRequirements() {
+  const container = document.getElementById('field-requirements');
+  const tables = ['stores', 'products', 'users', 'orders', 'order_details'];
+  const tableNames = {
+    stores: '店铺表',
+    products: '商品表',
+    users: '用户表',
+    orders: '订单表',
+    order_details: '订单明细表'
+  };
+  
+  container.innerHTML = tables.map(table => `
+    <div class="field-table">
+      <div class="field-table-header">
+        <h4>${tableNames[table]} (ods_${table}.csv)</h4>
+        <button class="btn-small btn-primary" onclick="addField('${table}')">+ 添加字段</button>
+      </div>
+      <table class="field-config-table">
+        <thead>
+          <tr>
+            <th>字段名</th>
+            <th>类型</th>
+            <th>必填</th>
+            <th>示例</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="fields-${table}">
+          ${currentFieldRequirements[table].map((field, idx) => renderFieldRow(table, field, idx)).join('')}
+        </tbody>
+      </table>
+    </div>
+  `).join('');
+}
+
+// 渲染字段行
+function renderFieldRow(table, field, idx) {
+  return `
+    <tr>
+      <td><input type="text" value="${field.name}" onchange="updateField('${table}', ${idx}, 'name', this.value)" /></td>
+      <td>
+        <select onchange="updateField('${table}', ${idx}, 'type', this.value)">
+          <option value="string" ${field.type === 'string' ? 'selected' : ''}>文本</option>
+          <option value="number" ${field.type === 'number' ? 'selected' : ''}>数字</option>
+          <option value="date" ${field.type === 'date' ? 'selected' : ''}>日期</option>
+          <option value="datetime" ${field.type === 'datetime' ? 'selected' : ''}>日期时间</option>
+        </select>
+      </td>
+      <td>
+        <input type="checkbox" ${field.required ? 'checked' : ''} onchange="updateField('${table}', ${idx}, 'required', this.checked)" />
+      </td>
+      <td><input type="text" value="${field.example}" onchange="updateField('${table}', ${idx}, 'example', this.value)" /></td>
+      <td>
+        <button class="btn-icon btn-danger" onclick="deleteField('${table}', ${idx})" title="删除">🗑</button>
+      </td>
+    </tr>
+  `;
+}
+
+// 更新字段
+function updateField(table, idx, prop, value) {
+  currentFieldRequirements[table][idx][prop] = value;
+}
+
+// 添加字段
+function addField(table) {
+  currentFieldRequirements[table].push({
+    name: '新字段',
+    type: 'string',
+    required: false,
+    example: ''
+  });
+  loadFieldRequirements();
+}
+
+// 删除字段
+function deleteField(table, idx) {
+  if (confirm('确定删除此字段？')) {
+    currentFieldRequirements[table].splice(idx, 1);
+    loadFieldRequirements();
+  }
+}
+
+// 重置字段配置
+function resetFields() {
+  if (confirm('确定重置为默认配置？')) {
+    currentFieldRequirements = JSON.parse(JSON.stringify(defaultFieldRequirements));
+    loadFieldRequirements();
+    showToast('已重置为默认配置', 'success');
+  }
+}
+
+// 下载模板
+function downloadTemplates() {
+  const tables = ['stores', 'products', 'users', 'orders', 'order_details'];
+  
+  tables.forEach(table => {
+    const fields = currentFieldRequirements[table];
+    const headers = fields.map(f => f.name).join(',');
+    const examples = fields.map(f => f.example).join(',');
+    const csv = `${headers}\n${examples}\n`;
+    
+    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `ods_${table}_template.csv`;
+    link.click();
+  });
+  
+  showToast('模板文件已下载', 'success');
+}
+
+// 选择导入文件
+function selectImportFiles() {
+  document.getElementById('import-files').click();
+}
+
+// 处理文件选择
+function handleFileSelect(event) {
+  const files = Array.from(event.target.files);
+  const fileList = document.getElementById('selected-files');
+  
+  if (files.length === 0) {
+    fileList.innerHTML = '<div class="no-files">未选择文件</div>';
+    return;
+  }
+  
+  fileList.innerHTML = files.map(file => `
+    <div class="file-item">
+      <span class="file-icon">📄</span>
+      <span class="file-name">${file.name}</span>
+      <span class="file-size">${(file.size / 1024).toFixed(2)} KB</span>
+    </div>
+  `).join('');
+}
+
+// 开始导入
+async function startImport() {
+  const files = document.getElementById('import-files').files;
+  
+  if (files.length === 0) {
+    showToast('请先选择要导入的文件', 'warning');
+    return;
+  }
+  
+  closeDialog('import-dialog');
+  updateStatus(0, '执行中...', '🔄', '#ed8936');
+  showToast('开始导入数据...', 'info');
+  
+  try {
+    const result = await ipcRenderer.invoke('import-ods', {
+      files: Array.from(files).map(f => f.path),
+      fieldRequirements: currentFieldRequirements
+    });
+    
+    if (result.success) {
+      updateStatus(0, '已完成', '✅', '#48bb78');
+      showToast('数据导入完成！', 'success');
+    }
+  } catch (error) {
+    updateStatus(0, '失败', '❌', '#f56565');
+    showToast(`导入失败: ${error.message}`, 'error');
+  }
+}
+
+// 关闭对话框
+function closeDialog(dialogId) {
+  document.getElementById(dialogId).style.display = 'none';
+}
+
+// 更新状态
+function updateStatus(step, status, icon, color) {
+  const statusEl = document.getElementById(`status-${step}`);
+  statusEl.textContent = `${icon} ${status}`;
+  statusEl.style.color = color;
+}
+
+// 显示轻量级通知
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  
+  const icons = {
+    success: '✅',
+    error: '❌',
+    info: 'ℹ️',
+    warning: '⚠️'
+  };
+  
+  toast.innerHTML = `
+    <span class="toast-icon">${icons[type]}</span>
+    <span class="toast-message">${message}</span>
+  `;
+  
+  container.appendChild(toast);
+  
+  setTimeout(() => toast.classList.add('show'), 10);
+  
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+// 开始生成ODS数据
+async function startGenerate() {
+  if (Object.keys(platformStores).length === 0) {
+    showToast('请至少选择一个平台！', 'warning');
+    return;
+  }
+
+  const numUsers = parseInt(document.getElementById('num-users').value);
+  const numOrders = parseInt(document.getElementById('num-orders').value);
+  const mainCategory = document.querySelector('input[name="main-category"]:checked').value;
+
+  closeDialog('generate-dialog');
+  updateStatus(0, '执行中...', '🔄', '#ed8936');
+  showToast('开始生成ODS层数据...', 'info');
+
+  try {
+    // 1. 生成CSV数据
+    const result = await ipcRenderer.invoke('generate-ods', {
+      platformStores,
+      numUsers,
+      numOrders,
+      mainCategory
+    });
+
+    if (result.success) {
+      showToast('CSV数据生成完成，正在加载到数据库...', 'info');
+      
+      // 2. 自动加载到数据库
+      const loadResult = await ipcRenderer.invoke('load-to-database', {
+        layer: 'ods',
+        mode: 'full',
+        dbConfig: {
+          host: 'localhost',
+          port: 3306,
+          database: 'datas',
+          user: 'root',
+          password: '132014'
+        }
+      });
+      
+      if (loadResult.success) {
+        updateStatusWithSql(0, '已完成', '✅', '#48bb78');
+        showToast('ODS层数据已加载到数据库！', 'success');
+      }
+    }
+  } catch (error) {
+    updateStatus(0, '失败', '❌', '#f56565');
+    showToast(`执行失败: ${error.message}`, 'error');
+  }
+}
+
+// 生成DWD层（直接在数据库中转换）
+async function generateDwd() {
+  updateStatus(1, '执行中...', '🔄', '#ed8936');
+  showToast('开始转换DWD层数据...', 'info');
+
+  try {
+    const result = await ipcRenderer.invoke('generate-dwd', {
+      mode: 'full',
+      dbConfig: {
+        host: 'localhost',
+        port: 3306,
+        database: 'datas',
+        user: 'root',
+        password: '132014'
+      }
+    });
+    
+    if (result.success) {
+      updateStatusWithSql(1, '已完成', '✅', '#48bb78');
+      showToast('DWD层数据转换完成！', 'success');
+    }
+  } catch (error) {
+    updateStatus(1, '失败', '❌', '#f56565');
+    showToast(`转换失败: ${error.message}`, 'error');
+  }
+}
+
+// 生成DWS层（直接在数据库中转换）
+async function generateDws() {
+  updateStatus(2, '执行中...', '🔄', '#ed8936');
+  showToast('开始转换DWS层数据...', 'info');
+
+  try {
+    const result = await ipcRenderer.invoke('generate-dws', {
+      mode: 'full',
+      dbConfig: {
+        host: 'localhost',
+        port: 3306,
+        database: 'datas',
+        user: 'root',
+        password: '132014'
+      }
+    });
+    
+    if (result.success) {
+      updateStatusWithSql(2, '已完成', '✅', '#48bb78');
+      showToast('DWS层数据转换完成！', 'success');
+    }
+  } catch (error) {
+    updateStatus(2, '失败', '❌', '#f56565');
+    showToast(`转换失败: ${error.message}`, 'error');
+  }
+}
+
+// 预览数据
+async function previewData(layer, step) {
+  const dialog = document.getElementById('preview-dialog');
+  const title = document.getElementById('preview-title');
+  const content = document.getElementById('preview-content');
+  
+  title.textContent = `${layer.toUpperCase()}层数据预览`;
+  content.innerHTML = '<div class="loading">⏳ 加载中...</div>';
+  dialog.style.display = 'flex';
+
+  try {
+    const result = await ipcRenderer.invoke('preview-data', layer);
+    if (result.success) {
+      let html = '<div class="preview-files">';
+      result.data.forEach(item => {
+        const lines = item.content.split('\n');
+        const headers = lines[0] ? lines[0].split(',') : [];
+        const rows = lines.slice(1, 11);
+        
+        html += `
+          <div class="preview-file">
+            <div class="preview-file-header">
+              <span class="preview-file-name">📄 ${item.file}</span>
+              <span class="preview-file-info">${lines.length - 1} 行数据</span>
+            </div>
+            <div class="preview-table-wrapper">
+              <table class="preview-table">
+                <thead>
+                  <tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr>
+                </thead>
+                <tbody>
+                  ${rows.map(row => {
+                    const cells = row.split(',');
+                    return `<tr>${cells.map(c => `<td>${c}</td>`).join('')}</tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      });
+      html += '</div>';
+      content.innerHTML = html;
+    } else {
+      content.innerHTML = `<div class="preview-error">❌ ${result.message}</div>`;
+    }
+  } catch (error) {
+    content.innerHTML = `<div class="preview-error">❌ 预览失败: ${error.message}</div>`;
+  }
+}
+
+// 监听日志消息（静默处理，不显示）
+ipcRenderer.on('log-message', (event, message) => {
+  // 静默处理，不显示日志
+  console.log(message);
+});
+
+// 窗口控制
+document.getElementById('minimize-btn').addEventListener('click', () => {
+  ipcRenderer.send('window-minimize');
+});
+
+document.getElementById('maximize-btn').addEventListener('click', () => {
+  ipcRenderer.send('window-maximize');
+});
+
+document.getElementById('close-btn').addEventListener('click', () => {
+  ipcRenderer.send('window-close');
+});
+
+// 初始化
+document.addEventListener('DOMContentLoaded', () => {
+  showToast('电商数仓配置器已启动', 'success');
+});
+
+
+// SQL信息数据
+const sqlInfo = {
+  0: { // ODS层
+    tables: [
+      { name: 'ods_stores', desc: '店铺表', sql: 'CREATE TABLE ods_stores (\n  店铺ID VARCHAR(10) PRIMARY KEY,\n  店铺名称 VARCHAR(100),\n  平台 VARCHAR(50),\n  开店日期 DATE\n);' },
+      { name: 'ods_products', desc: '商品表', sql: 'CREATE TABLE ods_products (\n  商品ID VARCHAR(10) PRIMARY KEY,\n  店铺ID VARCHAR(10),\n  平台 VARCHAR(50),\n  商品名称 VARCHAR(200),\n  一级类目 VARCHAR(50),\n  二级类目 VARCHAR(50),\n  售价 DECIMAL(10,2),\n  成本 DECIMAL(10,2),\n  库存 INT\n);' },
+      { name: 'ods_users', desc: '用户表', sql: 'CREATE TABLE ods_users (\n  用户ID VARCHAR(10) PRIMARY KEY,\n  用户名 VARCHAR(100),\n  性别 VARCHAR(10),\n  年龄 INT,\n  城市 VARCHAR(50),\n  注册日期 DATE\n);' },
+      { name: 'ods_orders', desc: '订单表', sql: 'CREATE TABLE ods_orders (\n  订单ID VARCHAR(10) PRIMARY KEY,\n  用户ID VARCHAR(10),\n  店铺ID VARCHAR(10),\n  平台 VARCHAR(50),\n  下单时间 DATETIME,\n  订单状态 VARCHAR(20),\n  商品总额 DECIMAL(10,2),\n  优惠金额 DECIMAL(10,2),\n  运费 DECIMAL(10,2),\n  实付金额 DECIMAL(10,2)\n);' },
+      { name: 'ods_order_details', desc: '订单明细表', sql: 'CREATE TABLE ods_order_details (\n  订单明细ID VARCHAR(10) PRIMARY KEY,\n  订单ID VARCHAR(10),\n  商品ID VARCHAR(10),\n  数量 INT,\n  单价 DECIMAL(10,2),\n  金额 DECIMAL(10,2)\n);' },
+      { name: 'ods_promotion', desc: '推广表', sql: 'CREATE TABLE ods_promotion (\n  推广ID VARCHAR(10) PRIMARY KEY,\n  日期 DATE,\n  店铺ID VARCHAR(10),\n  平台 VARCHAR(50),\n  商品ID VARCHAR(10),\n  推广渠道 VARCHAR(50),\n  推广花费 DECIMAL(10,2),\n  曝光量 INT,\n  点击量 INT\n);' },
+      { name: 'ods_traffic', desc: '流量表', sql: 'CREATE TABLE ods_traffic (\n  日期 DATE,\n  店铺ID VARCHAR(10),\n  平台 VARCHAR(50),\n  访客数 INT,\n  浏览量 INT,\n  搜索流量 INT,\n  推荐流量 INT,\n  直接访问 INT\n);' },
+      { name: 'ods_inventory', desc: '库存表', sql: 'CREATE TABLE ods_inventory (\n  库存记录ID VARCHAR(10) PRIMARY KEY,\n  日期 DATE,\n  商品ID VARCHAR(10),\n  店铺ID VARCHAR(10),\n  变动类型 VARCHAR(20),\n  变动数量 INT,\n  变动后库存 INT\n);' }
+    ]
+  },
+  1: { // DWD层
+    tables: [
+      { name: 'dwd_order_fact', desc: '订单事实表', sql: 'CREATE TABLE dwd_order_fact AS\nSELECT \n  o.订单ID, o.用户ID, o.店铺ID, o.平台,\n  o.下单时间, o.订单状态, o.实付金额,\n  u.性别, u.年龄, u.年龄段, u.城市,\n  s.店铺名称,\n  DATE(o.下单时间) AS 订单日期,\n  YEAR(o.下单时间) AS 年,\n  MONTH(o.下单时间) AS 月,\n  SUM(od.成本金额) AS 成本总额,\n  SUM(od.毛利) AS 毛利\nFROM ods_orders o\nLEFT JOIN ods_users u ON o.用户ID = u.用户ID\nLEFT JOIN ods_stores s ON o.店铺ID = s.店铺ID\nLEFT JOIN ods_order_details od ON o.订单ID = od.订单ID\nGROUP BY o.订单ID;' },
+      { name: 'dwd_order_detail_fact', desc: '订单明细事实表', sql: 'CREATE TABLE dwd_order_detail_fact AS\nSELECT \n  od.*,\n  p.商品名称, p.一级类目, p.二级类目, p.成本,\n  (p.成本 * od.数量) AS 成本金额,\n  (od.金额 - p.成本 * od.数量) AS 毛利,\n  ROUND((od.金额 - p.成本 * od.数量) / od.金额 * 100, 2) AS 毛利率\nFROM ods_order_details od\nLEFT JOIN ods_products p ON od.商品ID = p.商品ID;' },
+      { name: 'dim_product', desc: '商品维度表', sql: 'CREATE TABLE dim_product AS\nSELECT \n  p.*,\n  s.店铺名称, s.平台,\n  ROUND((p.售价 - p.成本) / p.售价 * 100, 2) AS 利润率\nFROM ods_products p\nLEFT JOIN ods_stores s ON p.店铺ID = s.店铺ID;' },
+      { name: 'dim_store', desc: '店铺维度表', sql: 'CREATE TABLE dim_store AS\nSELECT * FROM ods_stores;' },
+      { name: 'dim_user', desc: '用户维度表', sql: 'CREATE TABLE dim_user AS\nSELECT \n  *,\n  CASE \n    WHEN 年龄 <= 25 THEN \'18-25岁\'\n    WHEN 年龄 <= 35 THEN \'26-35岁\'\n    WHEN 年龄 <= 45 THEN \'36-45岁\'\n    WHEN 年龄 <= 55 THEN \'46-55岁\'\n    ELSE \'55岁以上\'\n  END AS 年龄段\nFROM ods_users;' }
+    ]
+  },
+  2: { // DWS层
+    tables: [
+      { name: 'dws_sales_summary', desc: '销售汇总表', sql: 'CREATE TABLE dws_sales_summary AS\nSELECT \n  订单日期 AS 日期,\n  DATE_FORMAT(订单日期, \'%Y-%m\') AS 年月,\n  平台, 店铺ID, 店铺名称,\n  一级类目, 二级类目,\n  COUNT(订单ID) AS 订单数,\n  COUNT(DISTINCT 用户ID) AS 客户数,\n  SUM(实付金额) AS 销售额,\n  SUM(成本总额) AS 成本,\n  SUM(毛利) AS 毛利,\n  ROUND(SUM(毛利) / SUM(实付金额) * 100, 2) AS 毛利率,\n  ROUND(SUM(实付金额) / COUNT(订单ID), 2) AS 客单价\nFROM dwd_order_fact\nWHERE 订单状态 = \'已完成\'\nGROUP BY 日期, 平台, 店铺ID, 一级类目, 二级类目;' },
+      { name: 'dws_inventory_summary', desc: '库存汇总表', sql: 'CREATE TABLE dws_inventory_summary AS\nSELECT \n  p.*,\n  i.变动后库存 AS 当前库存,\n  (p.成本 * i.变动后库存) AS 库存金额_成本,\n  (p.售价 * i.变动后库存) AS 库存金额_售价,\n  SUM(CASE WHEN i.变动类型=\'入库\' THEN i.变动数量 ELSE 0 END) AS 近30天入库量,\n  SUM(CASE WHEN i.变动类型=\'出库\' THEN i.变动数量 ELSE 0 END) AS 近30天出库量\nFROM dim_product p\nLEFT JOIN ods_inventory i ON p.商品ID = i.商品ID\nGROUP BY p.商品ID;' },
+      { name: 'dws_promotion_summary', desc: '推广汇总表', sql: 'CREATE TABLE dws_promotion_summary AS\nSELECT \n  pm.日期, pm.平台, pm.店铺ID, pm.商品ID, pm.推广渠道,\n  p.商品名称, p.一级类目, p.二级类目,\n  SUM(pm.推广花费) AS 推广花费,\n  SUM(pm.曝光量) AS 曝光量,\n  SUM(pm.点击量) AS 点击量,\n  ROUND(SUM(pm.点击量) / SUM(pm.曝光量) * 100, 2) AS 点击率,\n  COUNT(DISTINCT o.订单ID) AS 成交订单数,\n  SUM(o.实付金额) AS 成交金额,\n  ROUND(SUM(o.实付金额) / SUM(pm.推广花费), 2) AS ROI\nFROM ods_promotion pm\nLEFT JOIN dim_product p ON pm.商品ID = p.商品ID\nLEFT JOIN dwd_order_fact o ON pm.商品ID = o.商品ID AND pm.日期 = o.订单日期\nGROUP BY pm.日期, pm.平台, pm.商品ID, pm.推广渠道;' },
+      { name: 'dws_traffic_summary', desc: '流量汇总表', sql: 'CREATE TABLE dws_traffic_summary AS\nSELECT \n  t.日期, t.店铺ID, t.平台,\n  s.店铺名称,\n  t.访客数, t.浏览量,\n  t.搜索流量, t.推荐流量, t.直接访问,\n  COUNT(o.订单ID) AS 成交订单数,\n  SUM(o.实付金额) AS 成交金额,\n  COUNT(DISTINCT o.用户ID) AS 成交客户数,\n  ROUND(COUNT(DISTINCT o.用户ID) / t.访客数 * 100, 2) AS 访问转化率,\n  ROUND(t.浏览量 / t.访客数, 2) AS 人均浏览页数\nFROM ods_traffic t\nLEFT JOIN dim_store s ON t.店铺ID = s.店铺ID\nLEFT JOIN dwd_order_fact o ON t.店铺ID = o.店铺ID AND t.日期 = o.订单日期\nGROUP BY t.日期, t.店铺ID;' }
+    ]
+  }
+};
+
+// 显示SQL信息
+function showSqlInfo(step) {
+  const sqlInfoEl = document.getElementById(`sql-info-${step}`);
+  const sqlContentEl = document.getElementById(`sql-content-${step}`);
+  
+  if (sqlInfoEl.style.display === 'none') {
+    const info = sqlInfo[step];
+    let html = '';
+    
+    info.tables.forEach(table => {
+      html += `
+        <div class="sql-table-item">
+          <div class="sql-table-name">
+            <span class="sql-table-icon">📊</span>
+            <span>${table.name}</span>
+            <span style="color: #71717a; font-weight: normal; font-size: 12px;">- ${table.desc}</span>
+          </div>
+          <div class="sql-statement">${highlightSql(table.sql)}</div>
+        </div>
+      `;
+    });
+    
+    sqlContentEl.innerHTML = html;
+    sqlInfoEl.style.display = 'block';
+  } else {
+    sqlInfoEl.style.display = 'none';
+  }
+}
+
+// 切换SQL显示
+function toggleSql(step) {
+  const sqlInfoEl = document.getElementById(`sql-info-${step}`);
+  sqlInfoEl.style.display = 'none';
+}
+
+// SQL语法高亮
+function highlightSql(sql) {
+  const keywords = ['CREATE', 'TABLE', 'SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'LEFT JOIN', 'INNER JOIN', 'ON', 'AS', 'AND', 'OR', 'IN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'SUM', 'COUNT', 'AVG', 'MAX', 'MIN', 'ROUND', 'DISTINCT', 'DATE', 'YEAR', 'MONTH', 'DATE_FORMAT'];
+  
+  let highlighted = sql;
+  keywords.forEach(keyword => {
+    const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
+    highlighted = highlighted.replace(regex, `<span class="sql-keyword">${keyword}</span>`);
+  });
+  
+  return highlighted;
+}
+
+// 更新状态时显示SQL按钮
+function updateStatusWithSql(step, status, icon, color) {
+  updateStatus(step, status, icon, color);
+  if (status === '已完成') {
+    document.getElementById(`sql-btn-${step}`).style.display = 'inline-block';
+  }
+}
+
+
+// 当前要加载的层级
+let currentLoadLayer = 'ods';
+
+// 显示加载到数据库对话框
+function showLoadToDb(step) {
+  const layers = ['ods', 'dwd', 'dws'];
+  currentLoadLayer = layers[step];
+  document.getElementById('load-db-dialog').style.display = 'flex';
+}
+
+// 开始加载到数据库
+async function startLoadToDb() {
+  const dbConfig = {
+    host: document.getElementById('db-host').value,
+    port: parseInt(document.getElementById('db-port').value),
+    database: document.getElementById('db-name').value,
+    user: document.getElementById('db-user').value,
+    password: document.getElementById('db-password').value
+  };
+  
+  const mode = document.querySelector('input[name="load-mode"]:checked').value;
+  
+  closeDialog('load-db-dialog');
+  showToast(`开始加载${currentLoadLayer.toUpperCase()}层数据到数据库...`, 'info');
+  
+  try {
+    const result = await ipcRenderer.invoke('load-to-database', {
+      layer: currentLoadLayer,
+      mode: mode,
+      dbConfig: dbConfig
+    });
+    
+    if (result.success) {
+      showToast(`${currentLoadLayer.toUpperCase()}层数据加载完成！`, 'success');
+    }
+  } catch (error) {
+    showToast(`加载失败: ${error.message}`, 'error');
+  }
+}
+
+
+// 显示清空数据对话框
+function showClearDialog() {
+  document.getElementById('clear-dialog').style.display = 'flex';
+}
+
+// 确认清空数据
+async function confirmClear() {
+  const clearType = document.querySelector('input[name="clear-type"]:checked').value;
+  
+  closeDialog('clear-dialog');
+  showToast('开始清空数据...', 'info');
+  
+  try {
+    const result = await ipcRenderer.invoke('clear-data', {
+      clearType: clearType,
+      dbConfig: {
+        host: 'localhost',
+        port: 3306,
+        database: 'datas',
+        user: 'root',
+        password: '132014'
+      }
+    });
+    
+    if (result.success) {
+      // 重置所有步骤状态
+      for (let i = 0; i < 3; i++) {
+        updateStatus(i, '未执行', '⚪', '#71717a');
+        const sqlBtn = document.getElementById(`sql-btn-${i}`);
+        if (sqlBtn) sqlBtn.style.display = 'none';
+      }
+      
+      showToast('数据清空完成！', 'success');
+    }
+  } catch (error) {
+    showToast(`清空失败: ${error.message}`, 'error');
+  }
+}
