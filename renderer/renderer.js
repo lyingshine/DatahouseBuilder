@@ -9,6 +9,43 @@ const platforms = [
 // 平台店铺配置
 let platformStores = {};
 
+// 全局数据库配置
+let globalDbConfig = {
+  host: 'localhost',
+  port: 3306,
+  database: 'datas',
+  user: 'root',
+  password: ''
+};
+
+// 显示数据库配置对话框
+function showDbConfig() {
+  document.getElementById('global-db-host').value = globalDbConfig.host;
+  document.getElementById('global-db-port').value = globalDbConfig.port;
+  document.getElementById('global-db-name').value = globalDbConfig.database;
+  document.getElementById('global-db-user').value = globalDbConfig.user;
+  document.getElementById('global-db-password').value = globalDbConfig.password;
+  document.getElementById('db-config-dialog').style.display = 'flex';
+}
+
+// 保存数据库配置
+function saveDbConfig() {
+  globalDbConfig = {
+    host: document.getElementById('global-db-host').value,
+    port: parseInt(document.getElementById('global-db-port').value),
+    database: document.getElementById('global-db-name').value,
+    user: document.getElementById('global-db-user').value,
+    password: document.getElementById('global-db-password').value
+  };
+  closeDialog('db-config-dialog');
+  showToast('数据库配置已保存', 'success');
+}
+
+// 获取数据库配置
+function getDbConfig() {
+  return globalDbConfig;
+}
+
 // 初始化平台列表
 function initPlatformList() {
   const container = document.getElementById('platform-list');
@@ -420,13 +457,7 @@ async function startGenerate() {
       const loadResult = await ipcRenderer.invoke('load-to-database', {
         layer: 'ods',
         mode: 'full',
-        dbConfig: {
-          host: 'localhost',
-          port: 3306,
-          database: 'datas',
-          user: 'root',
-          password: '132014'
-        }
+        dbConfig: getDbConfig()
       });
       
       if (loadResult.success) {
@@ -448,13 +479,7 @@ async function generateDwd() {
   try {
     const result = await ipcRenderer.invoke('generate-dwd', {
       mode: 'full',
-      dbConfig: {
-        host: 'localhost',
-        port: 3306,
-        database: 'datas',
-        user: 'root',
-        password: '132014'
-      }
+      dbConfig: getDbConfig()
     });
     
     if (result.success) {
@@ -475,13 +500,7 @@ async function generateDws() {
   try {
     const result = await ipcRenderer.invoke('generate-dws', {
       mode: 'full',
-      dbConfig: {
-        host: 'localhost',
-        port: 3306,
-        database: 'datas',
-        user: 'root',
-        password: '132014'
-      }
+      dbConfig: getDbConfig()
     });
     
     if (result.success) {
@@ -660,45 +679,7 @@ function updateStatusWithSql(step, status, icon, color) {
 }
 
 
-// 当前要加载的层级
-let currentLoadLayer = 'ods';
 
-// 显示加载到数据库对话框
-function showLoadToDb(step) {
-  const layers = ['ods', 'dwd', 'dws'];
-  currentLoadLayer = layers[step];
-  document.getElementById('load-db-dialog').style.display = 'flex';
-}
-
-// 开始加载到数据库
-async function startLoadToDb() {
-  const dbConfig = {
-    host: document.getElementById('db-host').value,
-    port: parseInt(document.getElementById('db-port').value),
-    database: document.getElementById('db-name').value,
-    user: document.getElementById('db-user').value,
-    password: document.getElementById('db-password').value
-  };
-  
-  const mode = document.querySelector('input[name="load-mode"]:checked').value;
-  
-  closeDialog('load-db-dialog');
-  showToast(`开始加载${currentLoadLayer.toUpperCase()}层数据到数据库...`, 'info');
-  
-  try {
-    const result = await ipcRenderer.invoke('load-to-database', {
-      layer: currentLoadLayer,
-      mode: mode,
-      dbConfig: dbConfig
-    });
-    
-    if (result.success) {
-      showToast(`${currentLoadLayer.toUpperCase()}层数据加载完成！`, 'success');
-    }
-  } catch (error) {
-    showToast(`加载失败: ${error.message}`, 'error');
-  }
-}
 
 
 // 显示清空数据对话框
@@ -716,13 +697,7 @@ async function confirmClear() {
   try {
     const result = await ipcRenderer.invoke('clear-data', {
       clearType: clearType,
-      dbConfig: {
-        host: 'localhost',
-        port: 3306,
-        database: 'datas',
-        user: 'root',
-        password: '132014'
-      }
+      dbConfig: getDbConfig()
     });
     
     if (result.success) {
