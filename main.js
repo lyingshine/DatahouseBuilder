@@ -1,9 +1,14 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const fs = require('fs');
 
 let mainWindow;
 let pythonProcess;
+
+// 获取用户数据目录
+const userDataPath = app.getPath('userData');
+const configPath = path.join(userDataPath, '数据库信息');
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -276,10 +281,14 @@ ipcMain.handle('clear-data', async (event, config) => {
 
 // 保存数据库配置文件
 ipcMain.handle('save-db-config', async (event, dbConfig) => {
-  const fs = require('fs').promises;
-  const configPath = path.join(__dirname, '数据库信息');
+  const fsPromises = require('fs').promises;
   
   try {
+    // 确保用户数据目录存在
+    if (!fs.existsSync(userDataPath)) {
+      fs.mkdirSync(userDataPath, { recursive: true });
+    }
+    
     const content = `数据库类型：mysql
 数据库地址：${dbConfig.host}
 端口：${dbConfig.port}
@@ -288,7 +297,7 @@ ipcMain.handle('save-db-config', async (event, dbConfig) => {
 密码：${dbConfig.password}
 `;
     
-    await fs.writeFile(configPath, content, 'utf-8');
+    await fsPromises.writeFile(configPath, content, 'utf-8');
     return { success: true, message: '数据库配置已保存' };
   } catch (error) {
     return { success: false, message: error.message };
@@ -297,11 +306,10 @@ ipcMain.handle('save-db-config', async (event, dbConfig) => {
 
 // 读取数据库配置文件
 ipcMain.handle('load-db-config', async () => {
-  const fs = require('fs').promises;
-  const configPath = path.join(__dirname, '数据库信息');
+  const fsPromises = require('fs').promises;
   
   try {
-    const content = await fs.readFile(configPath, 'utf-8');
+    const content = await fsPromises.readFile(configPath, 'utf-8');
     const lines = content.split('\n');
     const config = {};
     
