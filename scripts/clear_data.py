@@ -32,8 +32,11 @@ def clear_local_data():
                 except Exception as e:
                     print(f"  ✗ 删除失败: {layer}/{csv_file} - {e}")
     
-    print(f"\n本地数据清空完成，共删除 {total_deleted} 个文件")
-    return total_deleted > 0
+    if total_deleted == 0:
+        print("  没有找到CSV文件")
+    else:
+        print(f"\n本地数据清空完成，共删除 {total_deleted} 个文件")
+    return True
 
 
 def clear_database_tables(db_config):
@@ -41,7 +44,16 @@ def clear_database_tables(db_config):
     print("\n清空数据库表...")
     
     try:
-        conn = pymysql.connect(**db_config)
+        # 连接数据库
+        print(f"  连接数据库: {db_config['host']}:{db_config['port']}/{db_config['database']}")
+        conn = pymysql.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database'],
+            charset='utf8mb4'
+        )
         cursor = conn.cursor()
         
         # 获取所有表
@@ -54,13 +66,15 @@ def clear_database_tables(db_config):
             conn.close()
             return True
         
+        print(f"  找到 {len(tables)} 张表")
+        
         # 临时禁用外键检查
         cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
         
         total_deleted = 0
         for table in tables:
             try:
-                cursor.execute(f"DROP TABLE IF EXISTS {table}")
+                cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
                 print(f"  ✓ 删除表: {table}")
                 total_deleted += 1
             except Exception as e:
@@ -76,8 +90,15 @@ def clear_database_tables(db_config):
         print(f"\n数据库清空完成，共删除 {total_deleted} 张表")
         return True
         
+    except pymysql.Error as e:
+        print(f"\n数据库错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
     except Exception as e:
-        print(f"\n数据库清空失败: {e}")
+        print(f"\n清空失败: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
@@ -111,20 +132,29 @@ def main():
     
     success = True
     
-    if clear_type in ['all', 'local']:
-        success = clear_local_data() and success
-    
-    if clear_type in ['all', 'database']:
-        success = clear_database_tables(db_config) and success
-    
-    print("\n" + "="*60)
-    if success:
-        print("✓ 数据清空完成！")
-    else:
-        print("✗ 数据清空失败")
-    print("="*60)
-    
-    if not success:
+    try:
+        if clear_type in ['all', 'local']:
+            local_success = clear_local_data()
+            success = success and local_success
+        
+        if clear_type in ['all', 'database']:
+            db_success = clear_database_tables(db_config)
+            success = success and db_success
+        
+        print("\n" + "="*60)
+        if success:
+            print("✓ 数据清空完成！")
+        else:
+            print("✗ 数据清空失败")
+        print("="*60)
+        
+        if not success:
+            sys.exit(1)
+            
+    except Exception as e:
+        print(f"\n执行失败: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
