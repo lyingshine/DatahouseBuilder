@@ -29,7 +29,7 @@ function showDbConfig() {
 }
 
 // 保存数据库配置
-function saveDbConfig() {
+async function saveDbConfig() {
   globalDbConfig = {
     host: document.getElementById('global-db-host').value,
     port: parseInt(document.getElementById('global-db-port').value),
@@ -37,8 +37,18 @@ function saveDbConfig() {
     user: document.getElementById('global-db-user').value,
     password: document.getElementById('global-db-password').value
   };
-  closeDialog('db-config-dialog');
-  showToast('数据库配置已保存', 'success');
+  
+  try {
+    const result = await ipcRenderer.invoke('save-db-config', globalDbConfig);
+    if (result.success) {
+      closeDialog('db-config-dialog');
+      showToast('数据库配置已保存', 'success');
+    } else {
+      showToast(`保存失败: ${result.message}`, 'error');
+    }
+  } catch (error) {
+    showToast(`保存失败: ${error.message}`, 'error');
+  }
 }
 
 // 获取数据库配置
@@ -584,7 +594,17 @@ document.getElementById('close-btn').addEventListener('click', () => {
 });
 
 // 初始化
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // 加载数据库配置
+  try {
+    const result = await ipcRenderer.invoke('load-db-config');
+    if (result.success && result.config) {
+      globalDbConfig = result.config;
+    }
+  } catch (error) {
+    console.error('加载数据库配置失败:', error);
+  }
+  
   showToast('电商数仓配置器已启动', 'success');
 });
 

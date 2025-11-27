@@ -273,3 +273,63 @@ ipcMain.handle('clear-data', async (event, config) => {
     });
   });
 });
+
+// 保存数据库配置文件
+ipcMain.handle('save-db-config', async (event, dbConfig) => {
+  const fs = require('fs').promises;
+  const configPath = path.join(__dirname, '数据库信息');
+  
+  try {
+    const content = `数据库类型：mysql
+数据库地址：${dbConfig.host}
+端口：${dbConfig.port}
+数据库名：${dbConfig.database}
+用户名：${dbConfig.user}
+密码：${dbConfig.password}
+`;
+    
+    await fs.writeFile(configPath, content, 'utf-8');
+    return { success: true, message: '数据库配置已保存' };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+// 读取数据库配置文件
+ipcMain.handle('load-db-config', async () => {
+  const fs = require('fs').promises;
+  const configPath = path.join(__dirname, '数据库信息');
+  
+  try {
+    const content = await fs.readFile(configPath, 'utf-8');
+    const lines = content.split('\n');
+    const config = {};
+    
+    lines.forEach(line => {
+      if (line.includes('：')) {
+        const [key, value] = line.split('：');
+        const trimmedValue = value.trim();
+        
+        if (key.includes('数据库地址')) config.host = trimmedValue;
+        else if (key.includes('端口')) config.port = parseInt(trimmedValue);
+        else if (key.includes('数据库名')) config.database = trimmedValue;
+        else if (key.includes('用户名')) config.user = trimmedValue;
+        else if (key.includes('密码')) config.password = trimmedValue;
+      }
+    });
+    
+    return { success: true, config };
+  } catch (error) {
+    // 文件不存在时返回默认配置
+    return {
+      success: true,
+      config: {
+        host: 'localhost',
+        port: 3306,
+        database: 'datas',
+        user: 'root',
+        password: ''
+      }
+    };
+  }
+});
