@@ -553,11 +553,56 @@ async function previewData(layer, step) {
   }
 }
 
-// 监听日志消息（静默处理，不显示）
+// 当前是否显示进度日志
+let showingProgressLog = false;
+
+// 监听日志消息
 ipcRenderer.on('log-message', (event, message) => {
-  // 静默处理，不显示日志
   console.log(message);
+  
+  // 如果进度对话框打开，显示日志
+  if (showingProgressLog) {
+    appendProgressLog(message);
+  }
 });
+
+// 添加进度日志
+function appendProgressLog(message) {
+  const logContainer = document.getElementById('progress-log');
+  const logLine = document.createElement('div');
+  logLine.className = 'log-line';
+  
+  // 根据消息类型设置样式
+  if (message.includes('[错误]') || message.includes('✗') || message.includes('失败')) {
+    logLine.classList.add('log-error');
+  } else if (message.includes('[完成]') || message.includes('✓') || message.includes('完成')) {
+    logLine.classList.add('log-success');
+  } else if (message.includes('[进度]')) {
+    logLine.classList.add('log-progress');
+  } else if (message.includes('[配置]') || message.includes('[信息]')) {
+    logLine.classList.add('log-info');
+  }
+  
+  logLine.textContent = message;
+  logContainer.appendChild(logLine);
+  
+  // 自动滚动到底部
+  logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+// 显示进度对话框
+function showProgressDialog(title) {
+  document.getElementById('progress-title').textContent = title;
+  document.getElementById('progress-log').innerHTML = '';
+  document.getElementById('progress-dialog').style.display = 'flex';
+  showingProgressLog = true;
+}
+
+// 关闭进度对话框
+function closeProgressDialog() {
+  document.getElementById('progress-dialog').style.display = 'none';
+  showingProgressLog = false;
+}
 
 // 窗口控制
 document.getElementById('minimize-btn').addEventListener('click', () => {
@@ -635,8 +680,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   } catch (error) {
     console.error('加载数据库配置失败:', error);
   }
-  
-  showToast('电商数仓配置器已启动', 'success');
   
   // 每30秒自动检测一次连接状态
   setInterval(updateDbStatus, 30000);
@@ -746,7 +789,14 @@ async function confirmClear() {
   const clearType = document.querySelector('input[name="clear-type"]:checked').value;
   
   closeDialog('clear-dialog');
-  showToast('开始清空数据...', 'info');
+  
+  // 显示清空类型
+  const typeText = clearType === 'all' ? '本地文件和数据库' : 
+                   clearType === 'local' ? '本地文件' : '数据库';
+  
+  // 显示进度对话框
+  showProgressDialog(`清空数据 - ${typeText}`);
+  appendProgressLog(`开始清空${typeText}...`);
   
   try {
     const result = await ipcRenderer.invoke('clear-data', {
@@ -762,9 +812,14 @@ async function confirmClear() {
         if (sqlBtn) sqlBtn.style.display = 'none';
       }
       
+      appendProgressLog('\n操作完成！');
       showToast('数据清空完成！', 'success');
+    } else {
+      appendProgressLog(`\n[错误] ${result.message}`);
+      showToast(`清空失败: ${result.message}`, 'error');
     }
   } catch (error) {
+    appendProgressLog(`\n[错误] ${error.message}`);
     showToast(`清空失败: ${error.message}`, 'error');
   }
 }

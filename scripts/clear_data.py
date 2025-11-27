@@ -14,11 +14,29 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 
 def clear_local_data():
     """清空本地CSV文件"""
-    print("\n清空本地数据...")
+    print("\n[进度] 开始清空本地数据...")
+    sys.stdout.flush()
     
     layers = ['ods', 'dwd', 'dws']
     total_deleted = 0
     
+    # 先统计总文件数
+    total_files = 0
+    for layer in layers:
+        layer_path = os.path.join(DATA_DIR, layer)
+        if os.path.exists(layer_path):
+            csv_files = [f for f in os.listdir(layer_path) if f.endswith('.csv')]
+            total_files += len(csv_files)
+    
+    if total_files == 0:
+        print("[进度] 没有找到CSV文件")
+        sys.stdout.flush()
+        return True
+    
+    print(f"[进度] 找到 {total_files} 个CSV文件")
+    sys.stdout.flush()
+    
+    # 删除文件
     for layer in layers:
         layer_path = os.path.join(DATA_DIR, layer)
         if os.path.exists(layer_path):
@@ -27,41 +45,54 @@ def clear_local_data():
                 file_path = os.path.join(layer_path, csv_file)
                 try:
                     os.remove(file_path)
-                    print(f"  ✓ 删除文件: {layer}/{csv_file}")
                     total_deleted += 1
+                    progress = int((total_deleted / total_files) * 100)
+                    print(f"[进度] ({total_deleted}/{total_files}) {progress}% - 删除文件: {layer}/{csv_file}")
+                    sys.stdout.flush()
                 except Exception as e:
-                    print(f"  ✗ 删除失败: {layer}/{csv_file} - {e}")
+                    print(f"[错误] 删除失败: {layer}/{csv_file} - {e}")
+                    sys.stdout.flush()
     
-    if total_deleted == 0:
-        print("  没有找到CSV文件")
-    else:
-        print(f"\n本地数据清空完成，共删除 {total_deleted} 个文件")
+    print(f"[完成] 本地数据清空完成，共删除 {total_deleted} 个文件")
+    sys.stdout.flush()
     return True
 
 
 def clear_database_tables(db_config):
     """清空数据库表（仅删除程序生成的表）"""
-    print("\n清空数据库表...")
+    print("\n[进度] 开始清空数据库表...")
+    sys.stdout.flush()
     
     try:
         # 连接数据库
-        print(f"  连接数据库: {db_config['host']}:{db_config['port']}/{db_config['database']}")
+        print(f"[进度] 连接数据库: {db_config['host']}:{db_config['port']}/{db_config['database']}")
+        print(f"[进度] 使用用户: {db_config['user']}")
+        sys.stdout.flush()
+        
         conn = pymysql.connect(
             host=db_config['host'],
-            port=db_config['port'],
+            port=int(db_config['port']),
             user=db_config['user'],
-            password=db_config['password'],
+            password=str(db_config['password']),
             database=db_config['database'],
-            charset='utf8mb4'
+            charset='utf8mb4',
+            connect_timeout=10
         )
         cursor = conn.cursor()
         
+        print("[进度] 数据库连接成功 ✓")
+        sys.stdout.flush()
+        
         # 获取所有表
+        print("[进度] 正在查询数据库表...")
+        sys.stdout.flush()
+        
         cursor.execute("SHOW TABLES")
         all_tables = [table[0] for table in cursor.fetchall()]
         
         if not all_tables:
-            print("  数据库中没有表")
+            print("[进度] 数据库中没有表")
+            sys.stdout.flush()
             cursor.close()
             conn.close()
             return True
@@ -76,24 +107,31 @@ def clear_database_tables(db_config):
         ]
         
         if not program_tables:
-            print("  没有找到程序生成的表")
+            print("[进度] 没有找到程序生成的表")
+            sys.stdout.flush()
             cursor.close()
             conn.close()
             return True
         
-        print(f"  找到 {len(program_tables)} 张程序生成的表")
+        print(f"[进度] 找到 {len(program_tables)} 张程序生成的表")
+        sys.stdout.flush()
         
         # 临时禁用外键检查
         cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
         
         total_deleted = 0
+        total_tables = len(program_tables)
+        
         for table in program_tables:
             try:
                 cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
-                print(f"  ✓ 删除表: {table}")
                 total_deleted += 1
+                progress = int((total_deleted / total_tables) * 100)
+                print(f"[进度] ({total_deleted}/{total_tables}) {progress}% - 删除表: {table}")
+                sys.stdout.flush()
             except Exception as e:
-                print(f"  ✗ 删除失败: {table} - {e}")
+                print(f"[错误] 删除失败: {table} - {e}")
+                sys.stdout.flush()
         
         # 恢复外键检查
         cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
@@ -102,17 +140,20 @@ def clear_database_tables(db_config):
         cursor.close()
         conn.close()
         
-        print(f"\n数据库清空完成，共删除 {total_deleted} 张表")
-        print(f"  保留了 {len(all_tables) - len(program_tables)} 张其他表")
+        print(f"[完成] 数据库清空完成，共删除 {total_deleted} 张表")
+        print(f"[信息] 保留了 {len(all_tables) - len(program_tables)} 张其他表")
+        sys.stdout.flush()
         return True
         
     except pymysql.Error as e:
-        print(f"\n数据库错误: {e}")
+        print(f"[错误] 数据库错误: {e}")
+        sys.stdout.flush()
         import traceback
         traceback.print_exc()
         return False
     except Exception as e:
-        print(f"\n清空失败: {e}")
+        print(f"[错误] 清空失败: {e}")
+        sys.stdout.flush()
         import traceback
         traceback.print_exc()
         return False
@@ -142,9 +183,13 @@ def main():
     print("="*60)
     print("数据清空工具")
     print("="*60)
-    print(f"清空类型: {clear_type}")
-    print(f"数据库: {db_config['host']}:{db_config['port']}/{db_config['database']}")
+    print(f"[配置] 清空类型: {clear_type}")
+    print(f"[配置] 数据库地址: {db_config['host']}:{db_config['port']}")
+    print(f"[配置] 数据库名: {db_config['database']}")
+    print(f"[配置] 用户名: {db_config['user']}")
+    print(f"[配置] 密码: {'*' * len(str(db_config.get('password', '')))}")
     print("="*60)
+    sys.stdout.flush()
     
     success = True
     
@@ -159,16 +204,18 @@ def main():
         
         print("\n" + "="*60)
         if success:
-            print("✓ 数据清空完成！")
+            print("[完成] ✓ 数据清空完成！")
         else:
-            print("✗ 数据清空失败")
+            print("[错误] ✗ 数据清空失败")
         print("="*60)
+        sys.stdout.flush()
         
         if not success:
             sys.exit(1)
             
     except Exception as e:
-        print(f"\n执行失败: {e}")
+        print(f"[错误] 执行失败: {e}")
+        sys.stdout.flush()
         import traceback
         traceback.print_exc()
         sys.exit(1)

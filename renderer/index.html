@@ -181,6 +181,24 @@
   <!-- 通知容器 -->
   <div id="toast-container" class="toast-container"></div>
 
+  <!-- 进度日志对话框 -->
+  <div id="progress-dialog" class="dialog-overlay" style="display: none;">
+    <div class="dialog dialog-large">
+      <div class="dialog-header">
+        <h2 id="progress-title">执行进度</h2>
+        <button class="dialog-close" onclick="closeProgressDialog()">✕</button>
+      </div>
+      <div class="dialog-content">
+        <div class="progress-log-container">
+          <div id="progress-log" class="progress-log"></div>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn btn-primary" onclick="closeProgressDialog()">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 清空数据对话框 -->
   <div id="clear-dialog" class="dialog-overlay" style="display: none;">
     <div class="dialog">

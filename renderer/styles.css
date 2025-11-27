@@ -1432,6 +1432,8 @@ body {
   font-size: 12px;
   color: #a1a1aa;
   font-weight: 500;
+  min-width: 48px;
+  text-align: center;
 }
 
 /* 警告框 */
@@ -1484,4 +1486,72 @@ body {
 .btn-danger:active {
   transform: translateY(0);
   box-shadow: 0 1px 4px rgba(220, 38, 38, 0.3);
+}
+
+/* 进度日志对话框 */
+.progress-log-container {
+  background: #18181b;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  padding: 16px;
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.progress-log {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #e4e4e7;
+}
+
+.log-line {
+  padding: 4px 8px;
+  margin: 2px 0;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.log-error {
+  background: rgba(220, 38, 38, 0.1);
+  color: #fca5a5;
+  border-left: 3px solid #dc2626;
+}
+
+.log-success {
+  background: rgba(72, 187, 120, 0.1);
+  color: #86efac;
+  border-left: 3px solid #48bb78;
+}
+
+.log-progress {
+  background: rgba(237, 137, 54, 0.1);
+  color: #fdba74;
+  border-left: 3px solid #ed8936;
+}
+
+.log-info {
+  background: rgba(102, 126, 234, 0.1);
+  color: #a5b4fc;
+  border-left: 3px solid #667eea;
+}
+
+/* 滚动条样式 */
+.progress-log-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.progress-log-container::-webkit-scrollbar-track {
+  background: #18181b;
+  border-radius: 4px;
+}
+
+.progress-log-container::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 4px;
+}
+
+.progress-log-container::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
 }
