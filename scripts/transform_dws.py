@@ -383,6 +383,34 @@ def create_sales_summary_impl(conn, mode):
         print(f"销售汇总表：共 {total_stores} 个店铺需要处理")
         sys.stdout.flush()
         
+        # 第一步：为每个店铺创建临时客单价表（按日期聚合）
+        print("销售汇总表：预计算客单价...")
+        sys.stdout.flush()
+        
+        cursor.execute("""
+        CREATE TEMPORARY TABLE tmp_daily_customer_price (
+            店铺ID VARCHAR(50),
+            订单日期 VARCHAR(20),
+            客单价 DECIMAL(10,2),
+            INDEX idx_store_date (店铺ID, 订单日期)
+        ) ENGINE=MEMORY
+        """)
+        
+        cursor.execute("""
+        INSERT INTO tmp_daily_customer_price
+        SELECT 
+            店铺ID,
+            订单日期,
+            ROUND(AVG(实付金额), 2) AS 客单价
+        FROM dwd_order_fact
+        WHERE 订单状态 = '已完成'
+        GROUP BY 店铺ID, 订单日期
+        """)
+        conn.commit()
+        
+        print("销售汇总表：客单价预计算完成")
+        sys.stdout.flush()
+        
         # 按店铺分批处理
         for idx, (store_id, store_name, platform) in enumerate(stores, 1):
             # 每个店铺单独聚合（按日期维度）
@@ -405,12 +433,16 @@ def create_sales_summary_impl(conn, mode):
                 SUM(od.金额) AS 销售额,
                 SUM(od.成本金额) AS 成本,
                 SUM(od.毛利) AS 毛利,
-                ROUND(AVG(od.毛利率), 2) AS 毛利率,
-                ROUND(SUM(od.金额) / COUNT(DISTINCT od.订单ID), 2) AS 客单价
+                CASE 
+                    WHEN SUM(od.金额) > 0 THEN ROUND((SUM(od.金额) - SUM(od.成本金额)) / SUM(od.金额) * 100, 2)
+                    ELSE 0
+                END AS 毛利率,
+                COALESCE(cp.客单价, 0) AS 客单价
             FROM dwd_order_detail_fact od
             INNER JOIN dwd_order_fact o ON od.订单ID = o.订单ID
+            LEFT JOIN tmp_daily_customer_price cp ON o.店铺ID = cp.店铺ID AND o.订单日期 = cp.订单日期
             WHERE o.订单状态 = '已完成' AND o.店铺ID = %s
-            GROUP BY o.订单日期, od.商品ID, od.商品名称, od.一级类目, od.二级类目
+            GROUP BY o.订单日期, od.商品ID, od.商品名称, od.一级类目, od.二级类目, cp.客单价
             """, (platform, store_id, store_name, store_id))
             
             # 每处理5个店铺提交一次
@@ -422,6 +454,9 @@ def create_sales_summary_impl(conn, mode):
         
         # 最后提交
         conn.commit()
+        
+        # 删除临时表
+        cursor.execute("DROP TEMPORARY TABLE IF EXISTS tmp_daily_customer_price")
         
         # 恢复设置
         cursor.execute("SET unique_checks=1")
