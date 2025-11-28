@@ -167,8 +167,13 @@ def generate_products(stores_df, category_config):
             price_min, price_max = price_ranges.get(main_cat, (50, 500))
             price = round(random.uniform(price_min, price_max), 2)
             
-            # 成本率根据类目不同
-            cost_rate = random.uniform(0.6, 0.8) if main_cat in high_value_cats else random.uniform(0.3, 0.6)
+            # 成本率根据类目不同（提高成本率，更贴合实际）
+            # 整车类：成本率 70-80%（品牌溢价低，竞争激烈）
+            # 配件类：成本率 45-60%（利润空间适中）
+            if main_cat in high_value_cats:
+                cost_rate = random.uniform(0.70, 0.80)
+            else:
+                cost_rate = random.uniform(0.45, 0.60)
             
             # 商品ID作为唯一SKU编码（格式：P + 6位数字）
             sku_code = f'P{product_id:06d}'
@@ -227,8 +232,9 @@ def generate_orders_batch(batch_id, batch_size, stores_list, store_products_dict
     order_details = []
     
     order_statuses = ['已完成', '已取消', '退款']
-    status_weights = [0.85, 0.10, 0.05]
+    status_weights = [0.92, 0.06, 0.02]  # 提高完成率到92%，更贴合实际电商数据
     payment_methods = ['支付宝', '微信', '银行卡']
+    payment_weights = [0.50, 0.40, 0.10]  # 支付宝和微信占主导
     
     # 预生成随机索引
     store_indices = np.random.randint(0, len(stores_list), batch_size)
@@ -241,10 +247,7 @@ def generate_orders_batch(batch_id, batch_size, stores_list, store_products_dict
     
     # 【性能优化2】预生成所有随机数
     order_status_choices = np.random.choice(order_statuses, size=batch_size, p=status_weights)
-    payment_method_choices = np.random.choice(payment_methods, size=batch_size)
-    discount_flags = np.random.random(batch_size) < 0.3
-    discount_rates = np.random.uniform(0, 0.15, batch_size)
-    shipping_fees = np.random.uniform(5, 15, batch_size)
+    payment_method_choices = np.random.choice(payment_methods, size=batch_size, p=payment_weights)
     update_days = np.random.randint(0, 8, batch_size)
     
     order_id = start_order_id
@@ -288,9 +291,11 @@ def generate_orders_batch(batch_id, batch_size, stores_list, store_products_dict
             ])
             detail_id += 1
         
-        discount = round(total_amount * discount_rates[i], 2) if discount_flags[i] else 0
-        shipping_fee = 0 if total_amount > 99 else round(shipping_fees[i], 2)
-        final_amount = round(total_amount - discount + shipping_fee, 2)
+        # 买家包邮，运费由商家承担（不加到实付金额中）
+        # 判断是否有大件商品（整车类）
+        has_large_item = any(store_products[idx]['一级类目'].startswith('整车') for idx in product_indices)
+        shipping_fee = 30 if has_large_item else 3
+        final_amount = round(total_amount, 2)  # 实付金额 = 商品总额（包邮）
         
         orders.append([
             f'O{order_id:08d}',
@@ -300,7 +305,7 @@ def generate_orders_batch(batch_id, batch_size, stores_list, store_products_dict
             order_time,
             order_status,
             round(total_amount, 2),
-            discount,
+            0,  # 优惠金额固定为0
             shipping_fee,
             final_amount if order_status == '已完成' else 0,
             round(total_cost, 2) if order_status == '已完成' else 0,
@@ -323,14 +328,10 @@ def generate_orders(stores_df, products_df, users_df, num_orders=50000, time_spa
     """
     print(f"   正在生成 {num_orders:,} 个订单（时间跨度: {time_span_days}天）...")
     
-    # 判断是否使用多进程（订单数超过10万时启用）
-    use_multithread = num_orders > 100000
-    
-    if use_multithread:
-        # 使用所有可用 CPU 核心（不限制）
-        num_threads = multiprocessing.cpu_count()
-        print(f"   使用多进程模式（{num_threads} 进程，充分利用 CPU）...")
-    
+    # 始终使用多进程模式
+    use_multithread = True
+    num_threads = multiprocessing.cpu_count()
+    print(f"   使用多进程模式（{num_threads} 进程，充分利用 CPU）...")
     sys.stdout.flush()
     
     # 预先计算每个店铺的商品列表
@@ -338,21 +339,13 @@ def generate_orders(stores_df, products_df, users_df, num_orders=50000, time_spa
     stores_list = stores_df.to_dict('records')
     users_list = users_df.to_dict('records')
     
-    if use_multithread:
-        # 多进程模式：将 DataFrame 转换为可序列化的字典列表
-        store_products_dict = {}
-        for store_id in stores_df['店铺ID'].unique():
-            prods = products_df[products_df['店铺ID'] == store_id]
-            if len(prods) > 0:
-                # 转换为字典列表（可序列化）
-                store_products_dict[store_id] = prods.to_dict('records')
-    else:
-        # 单进程模式：使用 DataFrame（更快）
-        store_products_map = {}
-        for store_id in stores_df['店铺ID'].unique():
-            prods = products_df[products_df['店铺ID'] == store_id]
-            if len(prods) > 0:
-                store_products_map[store_id] = prods
+    # 多进程模式：将 DataFrame 转换为可序列化的字典列表
+    store_products_dict = {}
+    for store_id in stores_df['店铺ID'].unique():
+        prods = products_df[products_df['店铺ID'] == store_id]
+        if len(prods) > 0:
+            # 转换为字典列表（可序列化）
+            store_products_dict[store_id] = prods.to_dict('records')
     
     if use_multithread:
         # 多进程模式：优化批次大小，确保每个进程有足够的工作量
@@ -428,105 +421,6 @@ def generate_orders(stores_df, products_df, users_df, num_orders=50000, time_spa
         
         orders = all_orders
         order_details = all_order_details
-        
-    else:
-        # 单线程模式（订单数较少时）
-        orders = []
-        order_details = []
-        
-        order_statuses = ['已完成', '已取消', '退款']
-        status_weights = [0.85, 0.10, 0.05]
-        payment_methods = ['支付宝', '微信', '银行卡']
-        
-        store_indices = np.random.randint(0, len(stores_list), num_orders)
-        user_indices = np.random.randint(0, len(users_list), num_orders)
-        
-        order_id = 1
-        detail_id = 1
-        progress_step = max(1, num_orders // 20)
-        
-        start_date = f'-{time_span_days}d'
-        end_date = 'now'
-        
-        # 【性能优化】预生成所有订单时间和随机数
-        now = datetime.now()
-        time_deltas = np.random.randint(0, time_span_days * 24 * 3600, num_orders)
-        order_times = [now - timedelta(seconds=int(delta)) for delta in time_deltas]
-        
-        order_status_choices = np.random.choice(order_statuses, size=num_orders, p=status_weights)
-        payment_method_choices = np.random.choice(payment_methods, size=num_orders)
-        discount_flags = np.random.random(num_orders) < 0.3
-        discount_rates = np.random.uniform(0, 0.15, num_orders)
-        shipping_fees = np.random.uniform(5, 15, num_orders)
-        update_days = np.random.randint(0, 8, num_orders)
-        
-        for i in range(num_orders):
-            store = stores_list[store_indices[i]]
-            user = users_list[user_indices[i]]
-            
-            store_products = store_products_map.get(store['店铺ID'])
-            if store_products is None or len(store_products) == 0:
-                continue
-            
-            order_time = order_times[i]
-            order_status = order_status_choices[i]
-            
-            num_items = random.randint(1, min(3, len(store_products)))
-            product_indices = np.random.choice(len(store_products), size=num_items, replace=False)
-            selected_products = store_products.iloc[product_indices]
-            
-            total_amount = 0
-            total_cost = 0
-            
-            # 使用 itertuples 代替 iterrows（快 10 倍）
-            for product in selected_products.itertuples():
-                quantity = random.randint(1, 3)
-                item_amount = product.售价 * quantity
-                item_cost = product.成本 * quantity
-                
-                total_amount += item_amount
-                total_cost += item_cost
-                
-                order_details.append([
-                    f'OD{detail_id:08d}',
-                    f'O{order_id:08d}',
-                    product.商品ID,
-                    quantity,
-                    product.售价,
-                    round(item_amount, 2)
-                ])
-                detail_id += 1
-            
-            discount = round(total_amount * discount_rates[i], 2) if discount_flags[i] else 0
-            shipping_fee = 0 if total_amount > 99 else round(shipping_fees[i], 2)
-            final_amount = round(total_amount - discount + shipping_fee, 2)
-            
-            orders.append([
-                f'O{order_id:08d}',
-                user['用户ID'],
-                store['店铺ID'],
-                store['平台'],
-                order_time,
-                order_status,
-                round(total_amount, 2),
-                discount,
-                shipping_fee,
-                final_amount if order_status == '已完成' else 0,
-                round(total_cost, 2) if order_status == '已完成' else 0,
-                payment_method_choices[i],
-                order_time,
-                order_time + timedelta(days=int(update_days[i]))
-            ])
-            
-            order_id += 1
-            
-            if i > 0 and i % progress_step == 0:
-                progress = int((i / num_orders) * 100)
-                print(f"   进度: {progress}% ({i:,}/{num_orders:,})")
-                sys.stdout.flush()
-        
-        print(f"   进度: 100% ({num_orders:,}/{num_orders:,})")
-        sys.stdout.flush()
     
     print("   正在创建DataFrame...")
     sys.stdout.flush()
@@ -579,7 +473,12 @@ def generate_promotion(stores_df, products_df, time_span_days=365):
     # 预生成日期列表（根据时间跨度）
     dates = [datetime.now().date() - timedelta(days=i) for i in range(min(time_span_days, 90))]  # 最多90天推广数据
     
-    for _, store in stores_df.iterrows():
+    # 随机选择70%的店铺进行推广投放（更贴合实际）
+    total_stores = len(stores_df)
+    promo_store_count = int(total_stores * 0.7)
+    promo_stores = stores_df.sample(promo_store_count)
+    
+    for _, store in promo_stores.iterrows():
         store_id = store['店铺ID']
         platform = store['平台']
         store_products = store_products_map.get(store_id)
@@ -596,14 +495,28 @@ def generate_promotion(stores_df, products_df, time_span_days=365):
                 impressions = random.randint(5000, 30000)
                 clicks = int(impressions * random.uniform(0.02, 0.04))
                 
+                # 推广花费：按每次点击成本(CPC)计算
+                # 调整CPC，让推广费占比在10-12%（合理区间）
+                if product['一级类目'].startswith('整车'):
+                    cpc = random.uniform(2, 4)  # 整车类CPC: 2-4元
+                else:
+                    cpc = random.uniform(1.5, 3)  # 配件类CPC: 1.5-3元
+                
+                promo_cost = round(clicks * cpc, 2)
+                
+                # 确保推广费至少80元（每天每个商品的推广预算）
+                promo_cost = max(80, promo_cost)
+                
                 promotions.append({
                     '推广ID': f'PM{promo_id:08d}',
                     '日期': date,
                     '店铺ID': store_id,
                     '平台': platform,
                     '商品ID': product['商品ID'],
+                    '一级类目': product['一级类目'],
+                    '二级类目': product['二级类目'],
                     '推广渠道': random.choice(channels),
-                    '推广花费': round(random.uniform(100, 400), 2),
+                    '推广花费': promo_cost,
                     '曝光量': impressions,
                     '点击量': clicks,
                     '点击率': round(clicks / impressions * 100, 2)

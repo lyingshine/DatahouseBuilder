@@ -178,101 +178,158 @@ def transform_dws(mode='full', db_config=None):
         conn.commit()
         cursor.close()
         
-        # 使用多线程并行创建2个汇总表（只保留流量和推广）
-        print("\n使用多线程并行创建汇总表...")
-        sys.stdout.flush()
+        # 创建订单业务处理宽表
+        print("\n1. 创建订单业务处理宽表...")
         
-        # 保存 db_config 到局部变量
-        _db_config = db_config
-        _mode = mode
+        if mode == 'full':
+            execute_sql(conn, "DROP TABLE IF EXISTS dws_order_business", "删除旧表 dws_order_business")
         
-        # 定义2个汇总表的创建函数
-        def create_traffic_summary():
-            """创建流量汇总表"""
-            conn_local = get_db_connection(_db_config)
-            if not conn_local:
-                return False, "流量汇总表", "数据库连接失败"
-            
-            try:
-                return create_traffic_summary_impl(conn_local, _mode)
-            finally:
-                conn_local.close()
+        sql_order_business = """
+        CREATE TABLE IF NOT EXISTS dws_order_business
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        AS
+        SELECT 
+            订单明细ID,
+            订单ID,
+            下单时间,
+            订单日期,
+            年, 月, 日, 星期, 小时, 年月,
+            CASE 
+                WHEN 订单状态 = '退款' THEN '售后完成'
+                ELSE 订单状态
+            END AS 订单状态,
+            用户ID, 用户名, 用户性别, 用户年龄, 用户年龄段, 用户城市,
+            店铺ID, 店铺名称, 平台,
+            商品ID, 商品名称, 一级类目, 二级类目,
+            数量, 单价,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN 实收金额
+                ELSE 0
+            END AS 实收金额,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN 0
+                ELSE 实收金额
+            END AS 退款金额,
+            商品单位成本,
+            商品成本金额,
+            分摊运费成本,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN 实收金额
+                ELSE 0
+            END - 商品成本金额 - 分摊运费成本 AS 毛利,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') AND 实收金额 > 0 
+                THEN ROUND((实收金额 - 商品成本金额 - 分摊运费成本) / 实收金额 * 100, 2)
+                ELSE 0
+            END AS 毛利率,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN ROUND(实收金额 * 0.05, 2)
+                ELSE 0
+            END AS 平台费,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN ROUND(实收金额 * 0.02, 2)
+                ELSE 0
+            END AS 售后费,
+            ROUND(实收金额 * 0.10, 2) AS 管理费,
+            推广费,
+            是否推广成交,
+            投产比,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN 实收金额
+                ELSE 0
+            END - CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN ROUND(实收金额 * 0.05, 2)
+                ELSE 0
+            END - CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') THEN ROUND(实收金额 * 0.02, 2)
+                ELSE 0
+            END - ROUND(实收金额 * 0.10, 2) - 商品成本金额 - 分摊运费成本 - 推广费 AS 净利润,
+            CASE 
+                WHEN 订单状态 IN ('已完成', '已发货') AND 实收金额 > 0 
+                THEN ROUND((实收金额 - ROUND(实收金额 * 0.05, 2) - ROUND(实收金额 * 0.02, 2) - ROUND(实收金额 * 0.10, 2) - 商品成本金额 - 分摊运费成本 - 推广费) / 实收金额 * 100, 2)
+                ELSE 0
+            END AS 净利率,
+            支付方式,
+            推广渠道
+        FROM dwd_order_detail_wide
+        """
         
-        def create_promotion_summary():
-            """创建推广汇总表"""
-            conn_local = get_db_connection(_db_config)
-            if not conn_local:
-                return False, "推广汇总表", "数据库连接失败"
-            
-            try:
-                return create_promotion_summary_impl(conn_local, _mode)
-            finally:
-                conn_local.close()
+        if not execute_sql(conn, sql_order_business, "创建订单业务处理宽表"):
+            return False
         
-        # 使用2线程并行创建（任何一个失败就停止）
-        start_time = time.time()
-        success_count = 0
-        failed_table = None
-        error_message = None
+        # 创建退货率汇总表
+        print("\n2. 创建退货率汇总表...")
         
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = {
-                executor.submit(create_traffic_summary): "流量汇总表",
-                executor.submit(create_promotion_summary): "推广汇总表"
-            }
-            
-            try:
-                for future in as_completed(futures):
-                    table_name = futures[future]
-                    try:
-                        success, name, message = future.result()
-                        if success:
-                            print(f"  ✓ {name} 创建完成")
-                            sys.stdout.flush()
-                            success_count += 1
-                        else:
-                            # 失败：记录错误并取消其他任务
-                            failed_table = name
-                            error_message = message
-                            print(f"  ✗ {name} 创建失败: {message}")
-                            sys.stdout.flush()
-                            
-                            # 取消所有未完成的任务
-                            for f in futures:
-                                f.cancel()
-                            
-                            raise Exception(f"{name} 创建失败: {message}")
-                            
-                    except Exception as e:
-                        # 异常：记录错误并取消其他任务
-                        if not failed_table:
-                            failed_table = table_name
-                            error_message = str(e)
-                        
-                        print(f"  ✗ {table_name} 创建异常: {e}")
-                        sys.stdout.flush()
-                        
-                        # 取消所有未完成的任务
-                        for f in futures:
-                            f.cancel()
-                        
-                        raise
-                        
-            except Exception as e:
-                elapsed = time.time() - start_time
-                print(f"\n多线程创建失败: {failed_table or '未知表'} 出错，已停止所有任务")
-                print(f"错误信息: {error_message or str(e)}")
-                print(f"耗时: {elapsed:.1f}秒")
-                sys.stdout.flush()
-                return False
+        if mode == 'full':
+            execute_sql(conn, "DROP TABLE IF EXISTS dws_return_rate", "删除旧表 dws_return_rate")
         
-        elapsed = time.time() - start_time
-        print(f"\n多线程创建完成: {success_count}/2 个表成功，耗时 {elapsed:.1f}秒")
-        sys.stdout.flush()
+        sql_return_rate = """
+        CREATE TABLE IF NOT EXISTS dws_return_rate
+        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        AS
+        SELECT 
+            '全部' AS 维度类型,
+            '全部' AS 维度值,
+            COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) AS 售后完成订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) AS 正常订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货', '售后完成') THEN 订单ID END) AS 总有效订单数,
+            CASE 
+                WHEN COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) > 0 
+                THEN ROUND(COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) * 100.0 / COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END), 2)
+                ELSE 0
+            END AS 退货率
+        FROM dws_order_business
         
-        if success_count < 2:
-            print(f"警告: 只有 {success_count} 个表创建成功")
-            sys.stdout.flush()
+        UNION ALL
+        
+        SELECT 
+            '平台' AS 维度类型,
+            平台 AS 维度值,
+            COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) AS 售后完成订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) AS 正常订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货', '售后完成') THEN 订单ID END) AS 总有效订单数,
+            CASE 
+                WHEN COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) > 0 
+                THEN ROUND(COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) * 100.0 / COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END), 2)
+                ELSE 0
+            END AS 退货率
+        FROM dws_order_business
+        GROUP BY 平台
+        
+        UNION ALL
+        
+        SELECT 
+            '店铺' AS 维度类型,
+            店铺名称 AS 维度值,
+            COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) AS 售后完成订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) AS 正常订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货', '售后完成') THEN 订单ID END) AS 总有效订单数,
+            CASE 
+                WHEN COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) > 0 
+                THEN ROUND(COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) * 100.0 / COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END), 2)
+                ELSE 0
+            END AS 退货率
+        FROM dws_order_business
+        GROUP BY 店铺名称
+        
+        UNION ALL
+        
+        SELECT 
+            '一级类目' AS 维度类型,
+            一级类目 AS 维度值,
+            COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) AS 售后完成订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) AS 正常订单数,
+            COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货', '售后完成') THEN 订单ID END) AS 总有效订单数,
+            CASE 
+                WHEN COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END) > 0 
+                THEN ROUND(COUNT(DISTINCT CASE WHEN 订单状态 = '售后完成' THEN 订单ID END) * 100.0 / COUNT(DISTINCT CASE WHEN 订单状态 IN ('已完成', '已发货') THEN 订单ID END), 2)
+                ELSE 0
+            END AS 退货率
+        FROM dws_order_business
+        GROUP BY 一级类目
+        """
+        
+        if not execute_sql(conn, sql_return_rate, "创建退货率汇总表"):
             return False
         
         print("\n" + "="*60)
@@ -290,11 +347,7 @@ def transform_dws(mode='full', db_config=None):
         conn.close()
 
 
-# 销售汇总表已取消生成，直接使用 DWD 层明细表查询
-# 原因：数据量不大，动态聚合更灵活，无需预聚合
-
-
-def create_traffic_summary_impl(conn, mode):
+def create_traffic_summary_impl_disabled(conn, mode):
     """实现：创建流量汇总表（两步优化版）"""
     try:
         print("流量汇总表：开始创建...")
@@ -453,11 +506,7 @@ def create_traffic_summary_impl(conn, mode):
         return False, "流量汇总表", error_msg
 
 
-# 库存汇总表已取消生成，直接使用 dim_product 商品维度表查询
-# 原因：库存数据本身就是维度数据，无需汇总
-
-
-def create_promotion_summary_impl(conn, mode):
+def create_promotion_summary_impl_disabled(conn, mode):
     """实现：创建推广汇总表（极致优化版）"""
     try:
         print("推广汇总表：开始创建...")
