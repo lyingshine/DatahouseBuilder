@@ -178,7 +178,7 @@ def transform_dws(mode='full', db_config=None):
         conn.commit()
         cursor.close()
         
-        # 使用多线程并行创建4个汇总表
+        # 使用多线程并行创建2个汇总表（只保留流量和推广）
         print("\n使用多线程并行创建汇总表...")
         sys.stdout.flush()
         
@@ -186,18 +186,7 @@ def transform_dws(mode='full', db_config=None):
         _db_config = db_config
         _mode = mode
         
-        # 定义4个汇总表的创建函数
-        def create_sales_summary():
-            """创建销售汇总表"""
-            conn_local = get_db_connection(_db_config)
-            if not conn_local:
-                return False, "销售汇总表", "数据库连接失败"
-            
-            try:
-                return create_sales_summary_impl(conn_local, _mode)
-            finally:
-                conn_local.close()
-        
+        # 定义2个汇总表的创建函数
         def create_traffic_summary():
             """创建流量汇总表"""
             conn_local = get_db_connection(_db_config)
@@ -206,17 +195,6 @@ def transform_dws(mode='full', db_config=None):
             
             try:
                 return create_traffic_summary_impl(conn_local, _mode)
-            finally:
-                conn_local.close()
-        
-        def create_inventory_summary():
-            """创建库存汇总表"""
-            conn_local = get_db_connection(_db_config)
-            if not conn_local:
-                return False, "库存汇总表", "数据库连接失败"
-            
-            try:
-                return create_inventory_summary_impl(conn_local, _mode)
             finally:
                 conn_local.close()
         
@@ -231,17 +209,15 @@ def transform_dws(mode='full', db_config=None):
             finally:
                 conn_local.close()
         
-        # 使用4线程并行创建（任何一个失败就停止）
+        # 使用2线程并行创建（任何一个失败就停止）
         start_time = time.time()
         success_count = 0
         failed_table = None
         error_message = None
         
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=2) as executor:
             futures = {
-                executor.submit(create_sales_summary): "销售汇总表",
                 executor.submit(create_traffic_summary): "流量汇总表",
-                executor.submit(create_inventory_summary): "库存汇总表",
                 executor.submit(create_promotion_summary): "推广汇总表"
             }
             
@@ -291,10 +267,10 @@ def transform_dws(mode='full', db_config=None):
                 return False
         
         elapsed = time.time() - start_time
-        print(f"\n多线程创建完成: {success_count}/4 个表成功，耗时 {elapsed:.1f}秒")
+        print(f"\n多线程创建完成: {success_count}/2 个表成功，耗时 {elapsed:.1f}秒")
         sys.stdout.flush()
         
-        if success_count < 4:
+        if success_count < 2:
             print(f"警告: 只有 {success_count} 个表创建成功")
             sys.stdout.flush()
             return False
@@ -314,191 +290,8 @@ def transform_dws(mode='full', db_config=None):
         conn.close()
 
 
-def create_sales_summary_impl(conn, mode):
-    """实现：创建销售汇总表（按商品分批聚合 - 避免内存溢出）"""
-    try:
-        print("销售汇总表：开始创建（按商品分批聚合）...")
-        sys.stdout.flush()
-        
-        cursor = conn.cursor()
-        
-        if mode == 'full':
-            cursor.execute("DROP TABLE IF EXISTS dws_sales_summary")
-            conn.commit()
-        
-        # 第一步：创建空表结构
-        print("销售汇总表：创建表结构...")
-        sys.stdout.flush()
-        
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS dws_sales_summary (
-            日期 VARCHAR(20),
-            商品ID VARCHAR(50),
-            商品名称 VARCHAR(200),
-            平台 VARCHAR(50),
-            店铺ID VARCHAR(50),
-            店铺名称 VARCHAR(200),
-            一级类目 VARCHAR(100),
-            二级类目 VARCHAR(100),
-            订单数 INT DEFAULT 0,
-            销售件数 INT DEFAULT 0,
-            销售额 DECIMAL(15,2) DEFAULT 0,
-            成本 DECIMAL(15,2) DEFAULT 0,
-            毛利 DECIMAL(15,2) DEFAULT 0,
-            毛利率 DECIMAL(10,2) DEFAULT 0,
-            客单价 DECIMAL(10,2) DEFAULT 0,
-            PRIMARY KEY (日期, 商品ID, 店铺ID)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        """)
-        conn.commit()
-        
-        # 第二步：按店铺分批聚合（避免一次性处理所有数据）
-        print("销售汇总表：开始分批聚合（按店铺维度）...")
-        sys.stdout.flush()
-        
-        # 设置会话级优化参数
-        cursor.execute("SET SESSION tmp_table_size = 2147483648")  # 2GB
-        cursor.execute("SET SESSION max_heap_table_size = 2147483648")  # 2GB
-        cursor.execute("SET SESSION sort_buffer_size = 268435456")  # 256MB
-        cursor.execute("SET SESSION join_buffer_size = 268435456")  # 256MB
-        cursor.execute("SET unique_checks=0")
-        cursor.execute("SET foreign_key_checks=0")
-        cursor.execute("SET autocommit=0")
-        
-        try:
-            cursor.execute("SET sql_log_bin=0")
-        except:
-            pass
-        
-        try:
-            cursor.execute("SET innodb_flush_log_at_trx_commit=0")
-        except:
-            pass
-        
-        # 获取所有店铺列表
-        cursor.execute("SELECT DISTINCT 店铺ID, 店铺名称, 平台 FROM dwd_order_fact WHERE 订单状态 = '已完成'")
-        stores = cursor.fetchall()
-        total_stores = len(stores)
-        
-        print(f"销售汇总表：共 {total_stores} 个店铺需要处理")
-        sys.stdout.flush()
-        
-        # 第一步：为每个店铺创建临时客单价表（按日期聚合）
-        print("销售汇总表：预计算客单价...")
-        sys.stdout.flush()
-        
-        cursor.execute("""
-        CREATE TEMPORARY TABLE tmp_daily_customer_price (
-            店铺ID VARCHAR(50),
-            订单日期 VARCHAR(20),
-            客单价 DECIMAL(10,2),
-            INDEX idx_store_date (店铺ID, 订单日期)
-        ) ENGINE=MEMORY
-        """)
-        
-        cursor.execute("""
-        INSERT INTO tmp_daily_customer_price
-        SELECT 
-            店铺ID,
-            订单日期,
-            ROUND(AVG(实付金额), 2) AS 客单价
-        FROM dwd_order_fact
-        WHERE 订单状态 = '已完成'
-        GROUP BY 店铺ID, 订单日期
-        """)
-        conn.commit()
-        
-        print("销售汇总表：客单价预计算完成")
-        sys.stdout.flush()
-        
-        # 按店铺分批处理
-        for idx, (store_id, store_name, platform) in enumerate(stores, 1):
-            # 每个店铺单独聚合（按日期维度）
-            cursor.execute("""
-            INSERT INTO dws_sales_summary (
-                日期, 商品ID, 商品名称, 平台, 店铺ID, 店铺名称, 一级类目, 二级类目, 
-                订单数, 销售件数, 销售额, 成本, 毛利, 毛利率, 客单价
-            )
-            SELECT 
-                o.订单日期 AS 日期,
-                od.商品ID,
-                od.商品名称,
-                %s AS 平台,
-                %s AS 店铺ID,
-                %s AS 店铺名称,
-                od.一级类目,
-                od.二级类目,
-                COUNT(DISTINCT od.订单ID) AS 订单数,
-                SUM(od.数量) AS 销售件数,
-                SUM(od.金额) AS 销售额,
-                SUM(od.成本金额) AS 成本,
-                SUM(od.毛利) AS 毛利,
-                CASE 
-                    WHEN SUM(od.金额) > 0 THEN ROUND((SUM(od.金额) - SUM(od.成本金额)) / SUM(od.金额) * 100, 2)
-                    ELSE 0
-                END AS 毛利率,
-                COALESCE(cp.客单价, 0) AS 客单价
-            FROM dwd_order_detail_fact od
-            INNER JOIN dwd_order_fact o ON od.订单ID = o.订单ID
-            LEFT JOIN tmp_daily_customer_price cp ON o.店铺ID = cp.店铺ID AND o.订单日期 = cp.订单日期
-            WHERE o.订单状态 = '已完成' AND o.店铺ID = %s
-            GROUP BY o.订单日期, od.商品ID, od.商品名称, od.一级类目, od.二级类目, cp.客单价
-            """, (platform, store_id, store_name, store_id))
-            
-            # 每处理5个店铺提交一次
-            if idx % 5 == 0:
-                conn.commit()
-                progress = int((idx / total_stores) * 100)
-                print(f"销售汇总表：进度 {progress}% ({idx}/{total_stores})")
-                sys.stdout.flush()
-        
-        # 最后提交
-        conn.commit()
-        
-        # 删除临时表
-        cursor.execute("DROP TEMPORARY TABLE IF EXISTS tmp_daily_customer_price")
-        
-        # 恢复设置
-        cursor.execute("SET unique_checks=1")
-        cursor.execute("SET foreign_key_checks=1")
-        try:
-            cursor.execute("SET sql_log_bin=1")
-        except:
-            pass
-        try:
-            cursor.execute("SET innodb_flush_log_at_trx_commit=1")
-        except:
-            pass
-        
-        # 获取最终行数
-        cursor.execute("SELECT COUNT(*) FROM dws_sales_summary")
-        row_count = cursor.fetchone()[0]
-        print(f"销售汇总表：数据聚合完成（{row_count:,} 个商品），正在创建索引...")
-        sys.stdout.flush()
-        
-        # 创建索引
-        try:
-            cursor.execute("ALTER TABLE dws_sales_summary ADD INDEX idx_date (日期)")
-            cursor.execute("ALTER TABLE dws_sales_summary ADD INDEX idx_platform (平台)")
-            cursor.execute("ALTER TABLE dws_sales_summary ADD INDEX idx_store (店铺ID)")
-            cursor.execute("ALTER TABLE dws_sales_summary ADD INDEX idx_category (一级类目)")
-            conn.commit()
-            print("销售汇总表：索引创建完成")
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"销售汇总表：索引创建警告 - {e}")
-            sys.stdout.flush()
-        
-        cursor.close()
-        return True, "销售汇总表", "成功"
-        
-    except Exception as e:
-        error_msg = str(e)
-        print(f"销售汇总表：创建失败 - {error_msg}")
-        sys.stdout.flush()
-        import traceback
-        traceback.print_exc()
-        return False, "销售汇总表", error_msg
+# 销售汇总表已取消生成，直接使用 DWD 层明细表查询
+# 原因：数据量不大，动态聚合更灵活，无需预聚合
 
 
 def create_traffic_summary_impl(conn, mode):
@@ -660,91 +453,8 @@ def create_traffic_summary_impl(conn, mode):
         return False, "流量汇总表", error_msg
 
 
-def create_inventory_summary_impl(conn, mode):
-    """实现：创建库存汇总表（极致优化版）"""
-    try:
-        print("库存汇总表：开始创建...")
-        sys.stdout.flush()
-        
-        if mode == 'full':
-            cursor = conn.cursor()
-            cursor.execute("DROP TABLE IF EXISTS dws_inventory_summary")
-            conn.commit()
-            cursor.close()
-        
-        # 优化：从商品表复制，添加统计日期
-        sql_inventory_summary = """
-        CREATE TABLE dws_inventory_summary
-        ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        AS
-        SELECT 
-            CURDATE() AS 统计日期,
-            商品ID,
-            商品名称,
-            店铺ID,
-            店铺名称,
-            平台,
-            一级类目,
-            二级类目,
-            售价,
-            成本,
-            库存 AS 当前库存,
-            (成本 * 库存) AS 库存金额_成本,
-            (售价 * 库存) AS 库存金额_售价
-        FROM dim_product
-        """
-        
-        cursor = conn.cursor()
-        cursor.execute("SET unique_checks=0")
-        cursor.execute("SET foreign_key_checks=0")
-        cursor.execute("SET autocommit=0")
-        
-        try:
-            cursor.execute("SET sql_log_bin=0")
-        except:
-            pass
-        
-        try:
-            cursor.execute("SET innodb_flush_log_at_trx_commit=0")
-        except:
-            pass
-        
-        print("库存汇总表：开始执行 SQL（快速）...")
-        sys.stdout.flush()
-        
-        cursor.execute(sql_inventory_summary)
-        
-        # 恢复设置
-        cursor.execute("SET unique_checks=1")
-        cursor.execute("SET foreign_key_checks=1")
-        try:
-            cursor.execute("SET sql_log_bin=1")
-        except:
-            pass
-        try:
-            cursor.execute("SET innodb_flush_log_at_trx_commit=1")
-        except:
-            pass
-        
-        conn.commit()
-        
-        # 获取创建的行数
-        cursor.execute("SELECT COUNT(*) FROM dws_inventory_summary")
-        row_count = cursor.fetchone()[0]
-        print(f"库存汇总表：数据创建完成（{row_count:,} 行）")
-        sys.stdout.flush()
-        
-        cursor.close()
-        
-        return True, "库存汇总表", "成功"
-        
-    except Exception as e:
-        error_msg = str(e)
-        print(f"库存汇总表：创建失败 - {error_msg}")
-        sys.stdout.flush()
-        import traceback
-        traceback.print_exc()
-        return False, "库存汇总表", error_msg
+# 库存汇总表已取消生成，直接使用 dim_product 商品维度表查询
+# 原因：库存数据本身就是维度数据，无需汇总
 
 
 def create_promotion_summary_impl(conn, mode):
