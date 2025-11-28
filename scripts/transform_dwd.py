@@ -37,11 +37,32 @@ def execute_sql(conn, sql, description):
         cursor.execute("SET foreign_key_checks=0")
         cursor.execute("SET autocommit=0")
         
+        # 尝试设置需要特殊权限的参数
+        try:
+            cursor.execute("SET sql_log_bin=0")  # 需要SUPER权限
+        except:
+            pass
+        
+        try:
+            cursor.execute("SET innodb_flush_log_at_trx_commit=2")  # 需要SUPER权限
+        except:
+            pass
+        
         cursor.execute(sql)
         
         # 恢复设置
         cursor.execute("SET unique_checks=1")
         cursor.execute("SET foreign_key_checks=1")
+        
+        try:
+            cursor.execute("SET sql_log_bin=1")
+        except:
+            pass
+        
+        try:
+            cursor.execute("SET innodb_flush_log_at_trx_commit=1")
+        except:
+            pass
         
         conn.commit()
         affected_rows = cursor.rowcount
@@ -76,6 +97,17 @@ def transform_dwd(mode='full', db_config=None):
         
         if mode == 'full':
             execute_sql(conn, "DROP TABLE IF EXISTS dwd_order_fact", "删除旧表 dwd_order_fact")
+        
+        # 创建索引以加速JOIN
+        print("  创建临时索引...")
+        cursor = conn.cursor()
+        try:
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_id ON ods_orders(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_store_id ON ods_orders(store_id)")
+            conn.commit()
+        except:
+            pass
+        cursor.close()
         
         sql_order_fact = """
         CREATE TABLE IF NOT EXISTS dwd_order_fact

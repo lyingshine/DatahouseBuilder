@@ -1,9 +1,8 @@
 const { ipcRenderer } = require('electron');
 
-// 平台列表
+// 平台列表（只保留7个平台）
 const platforms = [
-  "天猫", "京东", "抖音", "拼多多", "淘宝", "快手",
-  "唯品会", "苏宁易购", "国美", "小红书", "得物", "闲鱼"
+  "京东", "天猫", "抖音", "快手", "微信", "小红书", "拼多多"
 ];
 
 // 平台店铺配置
@@ -139,250 +138,85 @@ function updateStoreName(platform, idx, name) {
   }
 }
 
-// 显示ODS配置对话框
-function showOdsConfig() {
-  document.getElementById('ods-dialog').style.display = 'flex';
-}
-
 // 显示生成配置对话框
 function showGenerateConfig() {
-  closeDialog('ods-dialog');
   initPlatformList();
+  loadConfigFromFile();
   document.getElementById('generate-dialog').style.display = 'flex';
 }
 
-// 显示导入配置对话框
-function showImportConfig() {
-  closeDialog('ods-dialog');
-  loadFieldRequirements();
-  document.getElementById('import-dialog').style.display = 'flex';
+// 显示导入数据库配置对话框
+function showLoadConfig() {
+  document.getElementById('load-dialog').style.display = 'flex';
 }
 
-// 字段要求配置
-const defaultFieldRequirements = {
-  stores: [
-    { name: '店铺ID', type: 'string', required: true, example: 'S0001' },
-    { name: '店铺名称', type: 'string', required: true, example: '京东旗舰店1号' },
-    { name: '平台', type: 'string', required: true, example: '京东' },
-    { name: '开店日期', type: 'date', required: true, example: '2022-01-01' }
-  ],
-  products: [
-    { name: '商品ID', type: 'string', required: true, example: 'P000001' },
-    { name: '店铺ID', type: 'string', required: true, example: 'S0001' },
-    { name: '平台', type: 'string', required: true, example: '京东' },
-    { name: '商品名称', type: 'string', required: true, example: '公路车-轻量版' },
-    { name: '一级类目', type: 'string', required: true, example: '整车' },
-    { name: '二级类目', type: 'string', required: true, example: '公路车' },
-    { name: '售价', type: 'number', required: true, example: '2999.00' },
-    { name: '成本', type: 'number', required: true, example: '1800.00' },
-    { name: '库存', type: 'number', required: true, example: '100' }
-  ],
-  users: [
-    { name: '用户ID', type: 'string', required: true, example: 'U00000001' },
-    { name: '用户名', type: 'string', required: true, example: '张三' },
-    { name: '性别', type: 'string', required: true, example: '男' },
-    { name: '年龄', type: 'number', required: true, example: '28' },
-    { name: '城市', type: 'string', required: true, example: '北京' },
-    { name: '注册日期', type: 'date', required: false, example: '2023-01-01' }
-  ],
-  orders: [
-    { name: '订单ID', type: 'string', required: true, example: 'O00000001' },
-    { name: '用户ID', type: 'string', required: true, example: 'U00000001' },
-    { name: '店铺ID', type: 'string', required: true, example: 'S0001' },
-    { name: '平台', type: 'string', required: true, example: '京东' },
-    { name: '下单时间', type: 'datetime', required: true, example: '2024-01-01 10:30:00' },
-    { name: '订单状态', type: 'string', required: true, example: '已完成' },
-    { name: '商品总额', type: 'number', required: true, example: '2999.00' },
-    { name: '优惠金额', type: 'number', required: false, example: '100.00' },
-    { name: '运费', type: 'number', required: false, example: '0.00' },
-    { name: '实付金额', type: 'number', required: true, example: '2899.00' }
-  ],
-  order_details: [
-    { name: '订单明细ID', type: 'string', required: true, example: 'OD00000001' },
-    { name: '订单ID', type: 'string', required: true, example: 'O00000001' },
-    { name: '商品ID', type: 'string', required: true, example: 'P000001' },
-    { name: '数量', type: 'number', required: true, example: '1' },
-    { name: '单价', type: 'number', required: true, example: '2999.00' },
-    { name: '金额', type: 'number', required: true, example: '2999.00' }
-  ]
-};
-
-let currentFieldRequirements = JSON.parse(JSON.stringify(defaultFieldRequirements));
-
-// 加载字段要求
-function loadFieldRequirements() {
-  const container = document.getElementById('field-requirements');
-  const tables = ['stores', 'products', 'users', 'orders', 'order_details'];
-  const tableNames = {
-    stores: '店铺表',
-    products: '商品表',
-    users: '用户表',
-    orders: '订单表',
-    order_details: '订单明细表'
-  };
-  
-  container.innerHTML = tables.map(table => `
-    <div class="field-table">
-      <div class="field-table-header">
-        <h4>${tableNames[table]} (ods_${table}.csv)</h4>
-        <button class="btn-small btn-primary" onclick="addField('${table}')">+ 添加字段</button>
-      </div>
-      <table class="field-config-table">
-        <thead>
-          <tr>
-            <th>字段名</th>
-            <th>类型</th>
-            <th>必填</th>
-            <th>示例</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody id="fields-${table}">
-          ${currentFieldRequirements[table].map((field, idx) => renderFieldRow(table, field, idx)).join('')}
-        </tbody>
-      </table>
-    </div>
-  `).join('');
-}
-
-// 渲染字段行
-function renderFieldRow(table, field, idx) {
-  return `
-    <tr>
-      <td><input type="text" value="${field.name}" onchange="updateField('${table}', ${idx}, 'name', this.value)" /></td>
-      <td>
-        <select onchange="updateField('${table}', ${idx}, 'type', this.value)">
-          <option value="string" ${field.type === 'string' ? 'selected' : ''}>文本</option>
-          <option value="number" ${field.type === 'number' ? 'selected' : ''}>数字</option>
-          <option value="date" ${field.type === 'date' ? 'selected' : ''}>日期</option>
-          <option value="datetime" ${field.type === 'datetime' ? 'selected' : ''}>日期时间</option>
-        </select>
-      </td>
-      <td>
-        <input type="checkbox" ${field.required ? 'checked' : ''} onchange="updateField('${table}', ${idx}, 'required', this.checked)" />
-      </td>
-      <td><input type="text" value="${field.example}" onchange="updateField('${table}', ${idx}, 'example', this.value)" /></td>
-      <td>
-        <button class="btn-icon btn-danger" onclick="deleteField('${table}', ${idx})" title="删除">🗑</button>
-      </td>
-    </tr>
-  `;
-}
-
-// 更新字段
-function updateField(table, idx, prop, value) {
-  currentFieldRequirements[table][idx][prop] = value;
-}
-
-// 添加字段
-function addField(table) {
-  currentFieldRequirements[table].push({
-    name: '新字段',
-    type: 'string',
-    required: false,
-    example: ''
-  });
-  loadFieldRequirements();
-}
-
-// 删除字段
-function deleteField(table, idx) {
-  if (confirm('确定删除此字段？')) {
-    currentFieldRequirements[table].splice(idx, 1);
-    loadFieldRequirements();
-  }
-}
-
-// 重置字段配置
-function resetFields() {
-  if (confirm('确定重置为默认配置？')) {
-    currentFieldRequirements = JSON.parse(JSON.stringify(defaultFieldRequirements));
-    loadFieldRequirements();
-    showToast('已重置为默认配置', 'success');
-  }
-}
-
-// 下载模板
-function downloadTemplates() {
-  const tables = ['stores', 'products', 'users', 'orders', 'order_details'];
-  
-  tables.forEach(table => {
-    const fields = currentFieldRequirements[table];
-    const headers = fields.map(f => f.name).join(',');
-    const examples = fields.map(f => f.example).join(',');
-    const csv = `${headers}\n${examples}\n`;
-    
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `ods_${table}_template.csv`;
-    link.click();
-  });
-  
-  showToast('模板文件已下载', 'success');
-}
-
-// 选择导入文件
-function selectImportFiles() {
-  document.getElementById('import-files').click();
-}
-
-// 处理文件选择
-function handleFileSelect(event) {
-  const files = Array.from(event.target.files);
-  const fileList = document.getElementById('selected-files');
-  
-  if (files.length === 0) {
-    fileList.innerHTML = '<div class="no-files">未选择文件</div>';
-    return;
-  }
-  
-  fileList.innerHTML = files.map(file => `
-    <div class="file-item">
-      <span class="file-icon">📄</span>
-      <span class="file-name">${file.name}</span>
-      <span class="file-size">${(file.size / 1024).toFixed(2)} KB</span>
-    </div>
-  `).join('');
-}
-
-// 开始导入
-async function startImport() {
-  const files = document.getElementById('import-files').files;
-  
-  if (files.length === 0) {
-    showToast('请先选择要导入的文件', 'warning');
-    return;
-  }
-  
-  closeDialog('import-dialog');
-  updateStatus(0, '执行中...', '🔄', '#ed8936');
-  
-  // 标记进程正在运行
-  currentProcessIds[0] = 'import-ods';
-  
-  // 显示步骤进度
-  showStepProgress(0);
-  appendStepLog(0, '开始导入数据...');
-  
+// 加载配置文件
+async function loadConfigFromFile() {
   try {
-    const result = await ipcRenderer.invoke('import-ods', {
-      files: Array.from(files).map(f => f.path),
-      fieldRequirements: currentFieldRequirements
-    });
-    
-    if (result.success) {
-      updateStatus(0, '已完成', '✅', '#48bb78');
-      appendStepLog(0, '\n[完成] 数据导入完成！');
-      showToast('数据导入完成！', 'success');
+    const result = await ipcRenderer.invoke('load-generate-config');
+    if (result.success && result.config) {
+      const config = result.config;
+      
+      // 加载平台店铺配置
+      if (config.platformStores) {
+        platformStores = config.platformStores;
+        Object.keys(platformStores).forEach(platform => {
+          const checkbox = document.getElementById(`platform-${platform}`);
+          if (checkbox) {
+            checkbox.checked = true;
+            const countInput = document.getElementById(`count-${platform}`);
+            countInput.value = platformStores[platform].length;
+            togglePlatform(platform, true);
+          }
+        });
+      }
+      
+      // 加载数据量配置
+      if (config.numOrders) {
+        document.getElementById('num-orders').value = config.numOrders;
+      }
+      if (config.timeSpanDays) {
+        document.getElementById('time-span-days').value = config.timeSpanDays;
+      }
+      
+      // 加载主营类目
+      if (config.mainCategory) {
+        const radio = document.getElementById(`cat-${config.mainCategory}`);
+        if (radio) radio.checked = true;
+      }
+      
+      updateGenerateEstimate();
     }
   } catch (error) {
-    updateStatus(0, '失败', '❌', '#f56565');
-    appendStepLog(0, `\n[错误] ${error.message}`);
-    showToast(`导入失败: ${error.message}`, 'error');
-  } finally {
-    hideStepProgress(0);
+    console.error('加载配置失败:', error);
   }
+}
+
+// 保存配置到文件
+async function saveConfig() {
+  const config = {
+    platformStores: platformStores,
+    numOrders: parseInt(document.getElementById('num-orders').value),
+    timeSpanDays: parseInt(document.getElementById('time-span-days').value),
+    mainCategory: document.querySelector('input[name="main-category"]:checked').value
+  };
+  
+  try {
+    const result = await ipcRenderer.invoke('save-generate-config', config);
+    if (result.success) {
+      showToast('配置已保存', 'success');
+    } else {
+      showToast('保存失败', 'error');
+    }
+  } catch (error) {
+    showToast(`保存失败: ${error.message}`, 'error');
+  }
+}
+
+// 加载配置（按钮）
+async function loadConfig() {
+  await loadConfigFromFile();
+  showToast('配置已加载', 'success');
 }
 
 // 关闭对话框
@@ -487,15 +321,10 @@ function stopEstimate(step) {
 
 // 更新生成配置的预估时间
 function updateGenerateEstimate() {
-  const numUsers = parseInt(document.getElementById('num-users').value) || 3000;
   const numOrders = parseInt(document.getElementById('num-orders').value) || 20000;
   
-  // 基于实际测试的预估时间
-  // 数据生成: 约0.00008秒/用户, 0.00025秒/订单
-  // 数据库插入: 约0.00015秒/用户, 0.0003秒/订单
-  const generateTime = (numUsers * 0.00008 + numOrders * 0.00025) + 5;
-  const loadTime = (numUsers * 0.00015 + numOrders * 0.0003) + 15;
-  const estimateSeconds = Math.ceil(generateTime + loadTime);
+  // 基于订单数预估时间（每万条订单约5-10秒）
+  const estimateSeconds = Math.ceil((numOrders / 10000) * 7) + 5;
   
   const minutes = Math.floor(estimateSeconds / 60);
   const secs = estimateSeconds % 60;
@@ -553,16 +382,19 @@ function showToast(message, type = 'info') {
   }, 3000);
 }
 
-// 开始生成ODS数据
+// 开始生成ODS数据（只生成CSV，不导入数据库）
 async function startGenerate() {
   if (Object.keys(platformStores).length === 0) {
     showToast('请至少选择一个平台！', 'warning');
     return;
   }
 
-  const numUsers = parseInt(document.getElementById('num-users').value);
   const numOrders = parseInt(document.getElementById('num-orders').value);
+  const timeSpanDays = parseInt(document.getElementById('time-span-days').value);
   const mainCategory = document.querySelector('input[name="main-category"]:checked').value;
+
+  // 先保存配置
+  await saveConfig();
 
   closeDialog('generate-dialog');
   updateStatus(0, '执行中...', '🔄', '#ed8936');
@@ -571,9 +403,7 @@ async function startGenerate() {
   currentProcessIds[0] = 'generate-ods';
   
   // 计算预估时间
-  const generateTime = (numUsers * 0.00008 + numOrders * 0.00025) + 5;
-  const loadTime = (numUsers * 0.00015 + numOrders * 0.0003) + 15;
-  const estimateSeconds = Math.ceil(generateTime + loadTime);
+  const estimateSeconds = Math.ceil((numOrders / 10000) * 7) + 5;
   showEstimate(0, estimateSeconds);
   
   // 显示步骤进度
@@ -581,34 +411,58 @@ async function startGenerate() {
   appendStepLog(0, '开始生成ODS层数据...');
 
   try {
-    // 1. 生成CSV数据
     const result = await ipcRenderer.invoke('generate-ods', {
       platformStores,
-      numUsers,
       numOrders,
+      timeSpanDays,
       mainCategory
     });
 
     if (result.success) {
-      appendStepLog(0, '\nCSV数据生成完成，正在加载到数据库...');
-      
-      // 2. 自动加载到数据库
-      const loadResult = await ipcRenderer.invoke('load-to-database', {
-        layer: 'ods',
-        mode: 'full',
-        dbConfig: getDbConfig()
-      });
-      
-      if (loadResult.success) {
-        updateStatusWithSql(0, '已完成', '✅', '#48bb78');
-        appendStepLog(0, '\n[完成] ODS层数据已加载到数据库！');
-        showToast('ODS层数据已加载到数据库！', 'success');
-      }
+      updateStatus(0, '已完成', '✅', '#48bb78');
+      appendStepLog(0, '\n[完成] CSV数据生成完成！');
+      showToast('CSV数据生成完成！可以点击"导入数据库"按钮导入', 'success');
     }
   } catch (error) {
     updateStatus(0, '失败', '❌', '#f56565');
     appendStepLog(0, `\n[错误] ${error.message}`);
     showToast(`执行失败: ${error.message}`, 'error');
+  } finally {
+    hideStepProgress(0);
+    stopEstimate(0);
+    currentProcessIds[0] = null;
+  }
+}
+
+// 开始导入数据库
+async function startLoad() {
+  const mode = document.querySelector('input[name="load-mode"]:checked').value;
+  
+  closeDialog('load-dialog');
+  updateStatus(0, '执行中...', '🔄', '#ed8936');
+  
+  currentProcessIds[0] = 'load-ods';
+  showEstimate(0, 20);
+  
+  showStepProgress(0);
+  appendStepLog(0, '开始导入ODS数据到数据库...');
+
+  try {
+    const result = await ipcRenderer.invoke('load-to-database', {
+      layer: 'ods',
+      mode: mode,
+      dbConfig: getDbConfig()
+    });
+    
+    if (result.success) {
+      updateStatusWithSql(0, '已完成', '✅', '#48bb78');
+      appendStepLog(0, '\n[完成] 数据已导入到数据库！');
+      showToast('数据已导入到数据库！', 'success');
+    }
+  } catch (error) {
+    updateStatus(0, '失败', '❌', '#f56565');
+    appendStepLog(0, `\n[错误] ${error.message}`);
+    showToast(`导入失败: ${error.message}`, 'error');
   } finally {
     hideStepProgress(0);
     stopEstimate(0);
@@ -1096,9 +950,13 @@ async function confirmClear() {
   showProgressDialog(`清空数据 - ${typeText}`);
   appendProgressLog(`开始清空${typeText}...`);
   
+  // 获取极速模式选项
+  const fastMode = document.getElementById('fast-mode').checked;
+  
   try {
     const result = await ipcRenderer.invoke('clear-data', {
       clearType: clearType,
+      fastMode: fastMode,
       dbConfig: getDbConfig()
     });
     
@@ -1119,5 +977,28 @@ async function confirmClear() {
   } catch (error) {
     appendProgressLog(`\n[错误] ${error.message}`);
     showToast(`清空失败: ${error.message}`, 'error');
+  }
+}
+
+// MySQL 性能优化
+async function optimizeMysql() {
+  showProgressDialog('MySQL 性能优化检测');
+  appendProgressLog('开始检测 MySQL 配置...');
+  
+  try {
+    const result = await ipcRenderer.invoke('optimize-mysql', {
+      dbConfig: getDbConfig()
+    });
+    
+    if (result.success) {
+      appendProgressLog('\n检测完成！');
+      showToast('性能检测完成，请查看日志', 'success');
+    } else {
+      appendProgressLog(`\n[错误] ${result.message}`);
+      showToast(`检测失败: ${result.message}`, 'error');
+    }
+  } catch (error) {
+    appendProgressLog(`\n[错误] ${error.message}`);
+    showToast(`检测失败: ${error.message}`, 'error');
   }
 }

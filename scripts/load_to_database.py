@@ -332,10 +332,21 @@ def batch_insert_native(df, table_name, engine):
         # 禁用自动提交
         conn.autocommit(False)
         
-        # 极致性能优化（移除需要SUPER权限的设置）
+        # 极致性能优化
         cursor.execute("SET unique_checks=0")
         cursor.execute("SET foreign_key_checks=0")
         cursor.execute("SET autocommit=0")
+        
+        # 尝试设置需要特殊权限的参数（如果失败则跳过）
+        try:
+            cursor.execute("SET sql_log_bin=0")  # 需要SUPER权限：禁用binlog
+        except:
+            pass
+        
+        try:
+            cursor.execute("SET innodb_flush_log_at_trx_commit=2")  # 需要SUPER权限：降低刷盘频率
+        except:
+            pass
         
         for i in range(0, total_rows, batch_size):
             batch = df.iloc[i:i+batch_size]
@@ -349,11 +360,113 @@ def batch_insert_native(df, table_name, engine):
         cursor.execute("SET unique_checks=1")
         cursor.execute("SET foreign_key_checks=1")
         
+        try:
+            cursor.execute("SET sql_log_bin=1")
+        except:
+            pass
+        
+        try:
+            cursor.execute("SET innodb_flush_log_at_trx_commit=1")
+        except:
+            pass
+        
         # 最后统一提交
         conn.commit()
     finally:
         cursor.close()
         conn.close()
+
+
+def load_with_load_data_infile(df, table_name, engine):
+    """
+    使用 LOAD DATA LOCAL INFILE 极速导入（需要开启 local_infile）
+    性能：比批量插入快 5-10 倍
+    
+    需要配置：
+    1. MySQL配置文件添加：local_infile=1
+    2. 或执行：SET GLOBAL local_infile=1; (需要SUPER权限)
+    """
+    import tempfile
+    import os
+    
+    try:
+        # 创建临时CSV文件
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, 
+                                         encoding='utf-8', newline='') as tmp_file:
+            tmp_path = tmp_file.name
+            # 写入CSV（不包含表头，LOAD DATA会跳过）
+            df.to_csv(tmp_path, index=False, header=True, encoding='utf-8')
+        
+        # 转换路径为Unix风格
+        tmp_path_unix = tmp_path.replace('\\', '/')
+        
+        # 获取列名
+        columns = ', '.join([f'`{col}`' for col in df.columns])
+        
+        # 创建表结构
+        first_row = df.iloc[0:1]
+        first_row.to_sql(table_name, con=engine, if_exists='replace', index=False)
+        
+        # 使用 LOAD DATA LOCAL INFILE
+        conn = engine.raw_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # 性能优化
+            cursor.execute("SET unique_checks=0")
+            cursor.execute("SET foreign_key_checks=0")
+            cursor.execute("SET autocommit=0")
+            
+            try:
+                cursor.execute("SET sql_log_bin=0")
+            except:
+                pass
+            
+            # LOAD DATA LOCAL INFILE
+            load_sql = f"""
+            LOAD DATA LOCAL INFILE '{tmp_path_unix}'
+            INTO TABLE `{table_name}`
+            CHARACTER SET utf8mb4
+            FIELDS TERMINATED BY ',' 
+            OPTIONALLY ENCLOSED BY '"'
+            LINES TERMINATED BY '\\n'
+            IGNORE 1 LINES
+            ({columns})
+            """
+            
+            cursor.execute(load_sql)
+            
+            # 恢复设置
+            cursor.execute("SET unique_checks=1")
+            cursor.execute("SET foreign_key_checks=1")
+            
+            try:
+                cursor.execute("SET sql_log_bin=1")
+            except:
+                pass
+            
+            conn.commit()
+            affected_rows = cursor.rowcount
+            
+            cursor.close()
+            conn.close()
+            
+            # 删除临时文件
+            os.unlink(tmp_path)
+            
+            return True, affected_rows
+            
+        except Exception as e:
+            cursor.close()
+            conn.close()
+            os.unlink(tmp_path)
+            raise e
+            
+    except Exception as e:
+        print(f"  LOAD DATA INFILE 失败: {str(e)}")
+        print(f"  回退到批量插入模式...")
+        sys.stdout.flush()
+        return False, 0
 
 
 def load_csv_file(csv_path, table_name):
@@ -460,26 +573,56 @@ def load_layer_to_db(layer, mode='full', db_config=None):
         print("  ✓ 旧表已删除")
         sys.stdout.flush()
     
-    # 多线程并行导入（极致并发）
+    # 尝试使用 LOAD DATA INFILE（最快），失败则回退到批量插入
     success_count = 0
+    use_load_data = True  # 默认尝试使用 LOAD DATA INFILE
+    
+    # 先测试是否支持 LOAD DATA LOCAL INFILE
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SHOW VARIABLES LIKE 'local_infile'"))
+            row = result.fetchone()
+            if row and row[1].lower() != 'on':
+                print("  ⚠️ local_infile 未开启，使用批量插入模式")
+                print("  提示：执行 SET GLOBAL local_infile=1; 可启用极速导入（需要SUPER权限）")
+                sys.stdout.flush()
+                use_load_data = False
+    except:
+        use_load_data = False
+    
+    # 多线程并行导入
     max_workers = min(len(dataframes), 16)  # 最多16线程
+    
+    def import_table(table_name, df):
+        """导入单个表"""
+        try:
+            if use_load_data and len(df) > 10000:  # 大表使用 LOAD DATA INFILE
+                success, rows = load_with_load_data_infile(df, table_name, engine)
+                if success:
+                    return table_name, True, f"LOAD DATA INFILE ({rows:,} 行)"
+            
+            # 回退到批量插入
+            batch_insert_native(df, table_name, engine)
+            return table_name, True, f"批量插入 ({len(df):,} 行)"
+        except Exception as e:
+            return table_name, False, str(e)
+    
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {}
         for table_name, df in dataframes.items():
             print(f"  提交任务: {table_name} ({len(df):,} 行)")
             sys.stdout.flush()
-            future = executor.submit(batch_insert_native, df, table_name, engine)
+            future = executor.submit(import_table, table_name, df)
             futures[future] = table_name
         
         for future in as_completed(futures):
-            table_name = futures[future]
-            try:
-                future.result()
-                print(f"  ✓ 导入成功: {table_name}")
+            table_name, success, message = future.result()
+            if success:
+                print(f"  ✓ 导入成功: {table_name} - {message}")
                 sys.stdout.flush()
                 success_count += 1
-            except Exception as e:
-                print(f"  ✗ 导入失败: {table_name} - {str(e)}")
+            else:
+                print(f"  ✗ 导入失败: {table_name} - {message}")
                 sys.stdout.flush()
     
     # 恢复MySQL设置

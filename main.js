@@ -407,3 +407,73 @@ ipcMain.handle('stop-process', async (event, processId) => {
   }
   return { success: false, message: '没有运行中的进程' };
 });
+
+// 保存生成配置
+ipcMain.handle('save-generate-config', async (event, config) => {
+  const fsPromises = require('fs').promises;
+  const configFilePath = path.join(appPath, 'config.json');
+  
+  try {
+    await fsPromises.writeFile(configFilePath, JSON.stringify(config, null, 2), 'utf-8');
+    return { success: true, message: '配置已保存' };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+});
+
+// 加载生成配置
+ipcMain.handle('load-generate-config', async () => {
+  const fsPromises = require('fs').promises;
+  const configFilePath = path.join(appPath, 'config.json');
+  
+  try {
+    const content = await fsPromises.readFile(configFilePath, 'utf-8');
+    const config = JSON.parse(content);
+    return { success: true, config };
+  } catch (error) {
+    // 文件不存在时返回默认配置
+    return {
+      success: true,
+      config: {
+        platformStores: {
+          '京东': ['京东旗舰店1号', '京东旗舰店2号', '京东旗舰店3号', '京东旗舰店4号'],
+          '天猫': ['天猫旗舰店1号', '天猫旗舰店2号', '天猫旗舰店3号', '天猫旗舰店4号'],
+          '抖音': ['抖音旗舰店1号', '抖音旗舰店2号', '抖音旗舰店3号', '抖音旗舰店4号'],
+          '快手': ['快手旗舰店1号', '快手旗舰店2号', '快手旗舰店3号', '快手旗舰店4号'],
+          '微信': ['微信旗舰店1号', '微信旗舰店2号', '微信旗舰店3号', '微信旗舰店4号'],
+          '小红书': ['小红书旗舰店1号', '小红书旗舰店2号', '小红书旗舰店3号', '小红书旗舰店4号'],
+          '拼多多': ['拼多多旗舰店1号', '拼多多旗舰店2号', '拼多多旗舰店3号', '拼多多旗舰店4号']
+        },
+        numOrders: 20000,
+        timeSpanDays: 365,
+        mainCategory: 'bicycle'
+      }
+    };
+  }
+});
+
+// MySQL 性能优化检测
+ipcMain.handle('optimize-mysql', async (event, config) => {
+  return new Promise((resolve, reject) => {
+    const scriptPath = path.join(appPath, 'scripts/optimize_mysql.py');
+    const optimizeProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+    });
+
+    optimizeProcess.stdout.on('data', (data) => {
+      event.sender.send('log-message', data.toString('utf8'));
+    });
+
+    optimizeProcess.stderr.on('data', (data) => {
+      event.sender.send('log-message', `错误: ${data.toString('utf8')}`);
+    });
+
+    optimizeProcess.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true, message: '性能检测完成' });
+      } else {
+        reject({ success: false, message: '性能检测失败' });
+      }
+    });
+  });
+});

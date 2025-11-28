@@ -58,6 +58,62 @@ def clear_local_data():
     return True
 
 
+def drop_and_recreate_database(db_config):
+    """删除并重建整个数据库（最快方式）"""
+    print("\n[进度] 开始删除并重建数据库（极速模式）...")
+    sys.stdout.flush()
+    
+    try:
+        database_name = db_config['database']
+        
+        # 连接到 MySQL（不指定数据库）
+        print(f"[进度] 连接数据库服务器: {db_config['host']}:{db_config['port']}")
+        sys.stdout.flush()
+        
+        conn = pymysql.connect(
+            host=db_config['host'],
+            port=int(db_config['port']),
+            user=db_config['user'],
+            password=str(db_config['password']),
+            charset='utf8mb4',
+            connect_timeout=30
+        )
+        cursor = conn.cursor()
+        
+        print("[进度] 连接成功 ✓")
+        sys.stdout.flush()
+        
+        # 删除数据库
+        print(f"[进度] 删除数据库: {database_name}")
+        sys.stdout.flush()
+        cursor.execute(f"DROP DATABASE IF EXISTS `{database_name}`")
+        
+        # 重建数据库
+        print(f"[进度] 重建数据库: {database_name}")
+        sys.stdout.flush()
+        cursor.execute(f"CREATE DATABASE `{database_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+        
+        cursor.close()
+        conn.close()
+        
+        print(f"[完成] 数据库 {database_name} 已重建 ✓")
+        sys.stdout.flush()
+        return True
+        
+    except pymysql.Error as e:
+        print(f"[错误] 数据库错误: {e}")
+        sys.stdout.flush()
+        import traceback
+        traceback.print_exc()
+        return False
+    except Exception as e:
+        print(f"[错误] 操作失败: {e}")
+        sys.stdout.flush()
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def clear_database_tables(db_config):
     """清空数据库表（仅删除程序生成的表）"""
     print("\n[进度] 开始清空数据库表...")
@@ -76,9 +132,9 @@ def clear_database_tables(db_config):
             password=str(db_config['password']),
             database=db_config['database'],
             charset='utf8mb4',
-            connect_timeout=10,
-            read_timeout=30,
-            write_timeout=30
+            connect_timeout=30,
+            read_timeout=600,
+            write_timeout=600
         )
         cursor = conn.cursor()
         
@@ -127,20 +183,30 @@ def clear_database_tables(db_config):
         total_deleted = 0
         total_tables = len(program_tables)
         
-        # 批量删除，减少输出频率
+        # 批量删除，使用 TRUNCATE 清空大表后再 DROP
         for i, table in enumerate(program_tables):
             try:
+                # 对于大表，先 TRUNCATE 再 DROP（更快）
+                if table.startswith('dwd_') or table.startswith('ods_order'):
+                    print(f"[进度] 清空大表: {table}（可能需要较长时间）...")
+                    sys.stdout.flush()
+                    try:
+                        cursor.execute(f"TRUNCATE TABLE `{table}`")
+                    except:
+                        pass  # 如果 TRUNCATE 失败，继续尝试 DROP
+                
                 cursor.execute(f"DROP TABLE IF EXISTS `{table}`")
                 total_deleted += 1
                 
-                # 每10%或每10个表显示一次进度
-                if (i + 1) % max(1, total_tables // 10) == 0 or (i + 1) % 10 == 0:
+                # 每10%或每5个表显示一次进度
+                if (i + 1) % max(1, total_tables // 10) == 0 or (i + 1) % 5 == 0:
                     progress = int((total_deleted / total_tables) * 100)
                     print(f"[进度] {progress}% ({total_deleted}/{total_tables})")
                     sys.stdout.flush()
             except Exception as e:
                 print(f"[错误] 删除失败: {table} - {e}")
                 sys.stdout.flush()
+                # 继续删除其他表，不中断
         
         # 恢复外键检查
         print("[进度] 恢复外键检查...")
@@ -187,12 +253,14 @@ def main():
         'password': ''
     })
     
-    clear_type = config.get('clearType', 'all')  # all, local, database
+    clear_type = config.get('clearType', 'all')  # all, local, database, fast
+    fast_mode = config.get('fastMode', False)  # 是否使用极速模式（DROP DATABASE）
     
     print("="*60)
     print("数据清空工具")
     print("="*60)
     print(f"[配置] 清空类型: {clear_type}")
+    print(f"[配置] 极速模式: {'是（DROP DATABASE）' if fast_mode else '否（逐表删除）'}")
     print(f"[配置] 数据库地址: {db_config['host']}:{db_config['port']}")
     print(f"[配置] 数据库名: {db_config['database']}")
     print(f"[配置] 用户名: {db_config['user']}")
@@ -208,7 +276,12 @@ def main():
             success = success and local_success
         
         if clear_type in ['all', 'database']:
-            db_success = clear_database_tables(db_config)
+            if fast_mode:
+                # 极速模式：DROP DATABASE
+                db_success = drop_and_recreate_database(db_config)
+            else:
+                # 普通模式：逐表删除
+                db_success = clear_database_tables(db_config)
             success = success and db_success
         
         print("\n" + "="*60)

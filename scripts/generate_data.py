@@ -718,6 +718,9 @@ def main():
         '京东': ['京东旗舰店1号', '京东旗舰店2号', '京东旗舰店3号', '京东旗舰店4号'],
         '天猫': ['天猫旗舰店1号', '天猫旗舰店2号', '天猫旗舰店3号', '天猫旗舰店4号'],
         '抖音': ['抖音旗舰店1号', '抖音旗舰店2号', '抖音旗舰店3号', '抖音旗舰店4号'],
+        '快手': ['快手旗舰店1号', '快手旗舰店2号', '快手旗舰店3号', '快手旗舰店4号'],
+        '微信': ['微信旗舰店1号', '微信旗舰店2号', '微信旗舰店3号', '微信旗舰店4号'],
+        '小红书': ['小红书旗舰店1号', '小红书旗舰店2号', '小红书旗舰店3号', '小红书旗舰店4号'],
         '拼多多': ['拼多多旗舰店1号', '拼多多旗舰店2号', '拼多多旗舰店3号', '拼多多旗舰店4号']
     })
     
@@ -827,26 +830,7 @@ def main():
     print("="*60)
     sys.stdout.flush()
     
-    # 直接从内存导入数据库（高速模式）
-    db_config = config.get('dbConfig')
-    if db_config:
-        print("\n正在从内存直接导入数据库（高速模式）...")
-        sys.stdout.flush()
-        
-        from load_to_database import load_dataframes_to_db
-        
-        dataframes = {
-            'stores': stores_df,
-            'products': products_df,
-            'users': users_df,
-            'orders': orders_df,
-            'order_details': order_details_df,
-            'promotion': promotion_df,
-            'traffic': traffic_df,
-            'inventory': inventory_df
-        }
-        
-        load_dataframes_to_db(dataframes, mode='full', db_config=db_config)
+    # 数据生成完成，不自动导入数据库
     
 
 
