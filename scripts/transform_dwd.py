@@ -148,7 +148,7 @@ def transform_dwd(mode='full', db_config=None):
                 order_id VARCHAR(50),
                 推广费 DECIMAL(15,2),
                 PRIMARY KEY (order_id)
-            ) ENGINE=MEMORY
+            ) ENGINE=InnoDB
         """)
         cursor.execute("""
             INSERT INTO tmp_order_promo
