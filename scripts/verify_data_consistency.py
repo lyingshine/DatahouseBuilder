@@ -171,7 +171,7 @@ def verify_financial_metrics(csv_orders_path, csv_promo_path, db_config, design_
         # 其他费用（按销售额比例）
         csv_after_sales = csv_sales * 0.02  # 售后费 2%
         csv_platform_fee = csv_sales * 0.05  # 平台费 5%
-        csv_management = csv_sales * 0.08  # 管理费 8%
+        csv_management = csv_sales * 0.10  # 管理费 10%
         
         # 净利润 = 毛利 - 推广费 - 售后费 - 平台费 - 管理费
         csv_net_profit = csv_gross_profit - csv_promo - csv_after_sales - csv_platform_fee - csv_management
@@ -213,7 +213,7 @@ def verify_financial_metrics(csv_orders_path, csv_promo_path, db_config, design_
         # 其他费用
         db_after_sales = db_sales * 0.02
         db_platform_fee = db_sales * 0.05
-        db_management = db_sales * 0.08
+        db_management = db_sales * 0.10
         
         # 净利润 = 毛利 - 推广费 - 售后费 - 平台费 - 管理费
         db_net_profit = db_gross_profit - db_promo - db_after_sales - db_platform_fee - db_management
