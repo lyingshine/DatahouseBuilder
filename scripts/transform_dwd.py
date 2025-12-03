@@ -8,7 +8,6 @@ DWD层转换 - 明细数据层（事实表）
 - 避免复杂JOIN：先处理主表，再关联维度
 - 使用临时表：减少锁竞争
 """
-import pymysql
 import sys
 import json
 import signal
@@ -16,10 +15,12 @@ import atexit
 import time
 from datetime import datetime
 
+# 导入数据库管理器
+from db_manager import get_db_manager, cleanup_global_db_manager
+
 # 分批处理配置
 BATCH_SIZE = 100000  # 每批10万行
 
-_global_connection = None
 _start_time = None  # 全局开始时间
 
 
@@ -33,177 +34,13 @@ def log(message, level='INFO'):
     print(f"[{timestamp}]{elapsed} {message}")
     sys.stdout.flush()
 
-def cleanup_connection():
-    """清理数据库连接并恢复全局配置"""
-    global _global_connection
-    if _global_connection:
-        try:
-            print("\n[清理] 正在恢复配置并释放连接...")
-            sys.stdout.flush()
-            
-            # 恢复全局配置
-            if hasattr(_global_connection, '_original_settings'):
-                cursor = _global_connection.cursor()
-                restored_count = 0
-                for var, value in _global_connection._original_settings.items():
-                    try:
-                        cursor.execute(f"SET GLOBAL {var} = {value}")
-                        restored_count += 1
-                    except:
-                        pass
-                cursor.close()
-                if restored_count > 0:
-                    print(f"[清理] ✓ 已恢复 {restored_count} 项全局配置")
-            
-            _global_connection.rollback()
-            _global_connection.close()
-            _global_connection = None
-            print("[清理] ✓ 连接已关闭")
-        except:
-            pass
 
 def signal_handler(signum, frame):
     """处理中断信号"""
     print("\n\n[中断] 检测到用户中断...")
     sys.stdout.flush()
-    cleanup_connection()
+    cleanup_global_db_manager()
     sys.exit(1)
-
-def get_db_connection(db_config):
-    """获取数据库连接"""
-    global _global_connection
-    try:
-        conn = pymysql.connect(
-            host=db_config['host'],
-            port=db_config['port'],
-            user=db_config['user'],
-            password=db_config['password'],
-            database=db_config['database'],
-            charset='utf8mb4'
-        )
-        _global_connection = conn
-        
-        cursor = conn.cursor()
-        
-        # 保存原始全局配置（用于恢复）
-        original_settings = {}
-        
-        # 尝试设置全局变量（需要SUPER权限）
-        print("  尝试应用极致性能优化...")
-        global_optimizations = {
-            'innodb_flush_log_at_trx_commit': '0',  # 0=最快（每秒刷盘到日志文件）
-            'sync_binlog': '0',  # 禁用binlog同步刷盘
-            'innodb_doublewrite': '0',  # 禁用双写缓冲（SSD可禁用）
-            'innodb_flush_neighbors': '0',  # 禁用邻页刷新（SSD优化）
-            'innodb_io_capacity': '5000',  # SSD极限
-            'innodb_io_capacity_max': '10000',
-            'innodb_read_io_threads': '20',  # 充分利用20核
-            'innodb_write_io_threads': '20',
-            'max_connections': '2000',
-            'local_infile': '1',
-        }
-        
-        applied_count = 0
-        for var, value in global_optimizations.items():
-            try:
-                # 保存原值
-                cursor.execute(f"SELECT @@GLOBAL.{var}")
-                result = cursor.fetchone()
-                if result:
-                    original_settings[var] = result[0]
-                
-                # 设置新值
-                cursor.execute(f"SET GLOBAL {var} = {value}")
-                applied_count += 1
-            except Exception as e:
-                # 某些变量可能无法动态修改或需要特殊权限
-                pass
-        
-        if applied_count > 0:
-            print(f"  ✓ 已应用 {applied_count} 项全局优化（需SUPER权限）")
-        else:
-            print("  ℹ️ 无SUPER权限，使用会话级优化")
-        
-        # 会话级优化（不需要特殊权限）- 极限配置
-        cursor.execute("SET SESSION sql_mode = ''")
-        cursor.execute("SET SESSION foreign_key_checks = 0")
-        cursor.execute("SET SESSION unique_checks = 0")
-        cursor.execute("SET SESSION autocommit = 0")
-        cursor.execute("SET SESSION sort_buffer_size = 67108864")        # 64MB
-        cursor.execute("SET SESSION join_buffer_size = 67108864")        # 64MB
-        cursor.execute("SET SESSION read_buffer_size = 33554432")        # 32MB
-        cursor.execute("SET SESSION read_rnd_buffer_size = 33554432")    # 32MB
-        cursor.execute("SET SESSION tmp_table_size = 8589934592")        # 8GB
-        cursor.execute("SET SESSION max_heap_table_size = 8589934592")   # 8GB
-        cursor.execute("SET SESSION bulk_insert_buffer_size = 536870912") # 512MB
-        cursor.execute("SET SESSION optimizer_switch = 'block_nested_loop=on,batched_key_access=on'")  # 优化器开关
-        
-        try:
-            cursor.execute("SET SESSION sql_log_bin = 0")  # 禁用binlog
-        except:
-            pass
-        
-        conn.commit()
-        cursor.close()
-        print("  ✓ 会话级缓冲区已优化（极速模式）")
-        
-        # 保存原始设置供恢复使用
-        conn._original_settings = original_settings
-        
-        return conn
-    except Exception as e:
-        print(f"数据库连接失败: {e}")
-        return None
-
-def execute_sql(conn, sql, description, skip_commit=False, batch_commit=False):
-    """执行SQL语句（带计时和时间戳）"""
-    cursor = None
-    try:
-        timestamp = datetime.now().strftime('%H:%M:%S')
-        elapsed_total = f"+{time.time() - _start_time:.1f}s" if _start_time else ""
-        print(f"  [{timestamp}] {description}...", end='', flush=True)
-        start_time = time.time()
-        
-        cursor = conn.cursor()
-        
-        # 对于大批量操作，禁用自动提交
-        if batch_commit:
-            cursor.execute("SET autocommit = 0")
-        
-        cursor.execute(sql)
-        
-        if not skip_commit:
-            conn.commit()
-        
-        elapsed = time.time() - start_time
-        affected_rows = cursor.rowcount
-        
-        if affected_rows > 0 and elapsed > 0:
-            speed = int(affected_rows / elapsed)
-            print(f" ✓ {affected_rows:,}行 ({elapsed:.1f}s, {speed:,}行/s)")
-        else:
-            print(f" ✓ ({elapsed:.1f}s)")
-        sys.stdout.flush()
-        return True
-    except Exception as e:
-        print(f" ✗ 失败: {e}")
-        sys.stdout.flush()
-        conn.rollback()
-        return False
-    finally:
-        if cursor:
-            cursor.close()
-
-def get_table_count(conn, table_name):
-    """获取表行数"""
-    cursor = conn.cursor()
-    try:
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-        return cursor.fetchone()[0]
-    except:
-        return 0
-    finally:
-        cursor.close()
 
 def batch_update(conn, update_sql, table_name, id_column, description):
     """分批更新数据"""
@@ -332,7 +169,7 @@ def batch_update_simple(conn, table_name, update_sql, description):
         cursor.close()
 
 
-def build_dim_tables(conn, mode='full'):
+def build_dim_tables(db_manager, mode='full'):
     """构建DIM层维度表"""
     log("【构建DIM层维度表】")
     
@@ -342,7 +179,7 @@ def build_dim_tables(conn, mode='full'):
     # 1. 日期维度表
     print("\n1. 日期维度表")
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dim_date", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dim_date", "删除旧表")
     
     sql_dim_date = """
     CREATE TABLE IF NOT EXISTS dim_date (
@@ -354,7 +191,7 @@ def build_dim_tables(conn, mode='full'):
         INDEX idx_date (date_value), INDEX idx_year_month (`year_month`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_dim_date, "创建日期维度表结构")
+    db_manager.execute_sql(sql_dim_date, "创建日期维度表结构")
     
     sql_insert_dates = """
     INSERT IGNORE INTO dim_date (date_key, date_value, `year`, `quarter`, `month`, `week`, `day`, `weekday`, weekday_name, is_weekend, `year_month`, `year_week`)
@@ -375,12 +212,12 @@ def build_dim_tables(conn, mode='full'):
         ) nums WHERE seq <= 1095
     ) dates
     """
-    execute_sql(conn, sql_insert_dates, "生成日期维度数据")
+    db_manager.execute_sql(sql_insert_dates, "生成日期维度数据")
     
     # 2. 用户维度表（简化设计）
     print("\n2. 用户维度表")
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dim_user", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dim_user", "删除旧表")
     
     sql_dim_user = """
     CREATE TABLE IF NOT EXISTS dim_user (
@@ -392,7 +229,7 @@ def build_dim_tables(conn, mode='full'):
         INDEX idx_user_id (user_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_dim_user, "创建用户维度表结构")
+    db_manager.execute_sql(sql_dim_user, "创建用户维度表结构")
     
     sql_insert_user = """
     INSERT INTO dim_user (user_id, user_name, gender, age, age_group, city, register_date)
@@ -402,12 +239,12 @@ def build_dim_tables(conn, mode='full'):
         city, register_date
     FROM ods_users WHERE user_id IS NOT NULL
     """
-    execute_sql(conn, sql_insert_user, "加载用户维度数据")
+    db_manager.execute_sql(sql_insert_user, "加载用户维度数据")
     
     # 3. 商品维度表（SKU ID 全局唯一）
     print("\n3. 商品维度表")
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dim_product", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dim_product", "删除旧表")
     
     sql_dim_product = """
     CREATE TABLE IF NOT EXISTS dim_product (
@@ -427,7 +264,7 @@ def build_dim_tables(conn, mode='full'):
         INDEX idx_category (category_l1, category_l2)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_dim_product, "创建商品维度表结构")
+    db_manager.execute_sql(sql_dim_product, "创建商品维度表结构")
     
     sql_insert_product = """
     INSERT INTO dim_product (sku_id, product_id, store_id, product_name, spec, category_l1, category_l2, price, cost, profit_margin, stock, platform)
@@ -436,12 +273,12 @@ def build_dim_tables(conn, mode='full'):
         stock, platform
     FROM ods_products WHERE sku_id IS NOT NULL
     """
-    execute_sql(conn, sql_insert_product, "加载商品维度数据")
+    db_manager.execute_sql(sql_insert_product, "加载商品维度数据")
     
     # 4. 店铺维度表（简化设计）
     print("\n4. 店铺维度表")
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dim_store", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dim_store", "删除旧表")
     
     sql_dim_store = """
     CREATE TABLE IF NOT EXISTS dim_store (
@@ -452,7 +289,7 @@ def build_dim_tables(conn, mode='full'):
         INDEX idx_store_id (store_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_dim_store, "创建店铺维度表结构")
+    db_manager.execute_sql(sql_dim_store, "创建店铺维度表结构")
     
     sql_insert_store = """
     INSERT INTO dim_store (store_id, store_name, platform, store_type, open_date)
@@ -462,18 +299,18 @@ def build_dim_tables(conn, mode='full'):
         open_date
     FROM ods_stores WHERE store_id IS NOT NULL
     """
-    execute_sql(conn, sql_insert_store, "加载店铺维度数据")
+    db_manager.execute_sql(sql_insert_store, "加载店铺维度数据")
     
     log("  ✓ DIM层维度表构建完成")
     return True
 
 
-def build_fact_order(conn, mode='full'):
+def build_fact_order(db_manager, mode='full'):
     """构建订单事实表（极速模式：一次INSERT SELECT完成）"""
     log("1. 订单事实表")
     
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dwd_fact_order", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dwd_fact_order", "删除旧表")
     
     # 创建表结构
     sql_create = """
@@ -505,7 +342,7 @@ def build_fact_order(conn, mode='full'):
         INDEX idx_traffic_source (traffic_source)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_create, "创建表结构")
+    db_manager.execute_sql(sql_create, "创建表结构")
     
     # 极速模式：一次INSERT SELECT完成所有关联（避免UPDATE）
     sql_insert_all = """
@@ -527,17 +364,17 @@ def build_fact_order(conn, mode='full'):
     INNER JOIN dim_store s ON o.store_id = s.store_id
     WHERE o.order_id IS NOT NULL
     """
-    if not execute_sql(conn, sql_insert_all, "一次性插入并关联（极速）"):
+    if not db_manager.execute_sql(sql_insert_all, "一次性插入并关联（极速）"):
         return False
     
     return True
 
-def build_fact_order_detail(conn, mode='full'):
+def build_fact_order_detail(db_manager, mode='full'):
     """构建订单明细事实表（极速模式：一次INSERT SELECT完成所有关联）"""
     log("2. 订单明细事实表")
     
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dwd_fact_order_detail", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dwd_fact_order_detail", "删除旧表")
     
     # 创建表结构
     sql_create = """
@@ -567,15 +404,11 @@ def build_fact_order_detail(conn, mode='full'):
         INDEX idx_store_key (store_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_create, "创建表结构")
+    db_manager.execute_sql(sql_create, "创建表结构")
     
     # 检查源表行数
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM ods_order_details")
-    ods_count = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM dim_product")
-    product_count = cursor.fetchone()[0]
-    cursor.close()
+    ods_count = db_manager.get_table_count("ods_order_details")
+    product_count = db_manager.get_table_count("dim_product")
     print(f"  源数据: ODS明细={ods_count:,}行, 商品维度={product_count:,}个")
     sys.stdout.flush()
     
@@ -599,17 +432,17 @@ def build_fact_order_detail(conn, mode='full'):
     STRAIGHT_JOIN dwd_fact_order o ON od.order_id = o.order_id
     LEFT JOIN dim_product p ON od.sku_id = p.sku_id
     """
-    if not execute_sql(conn, sql_insert_all, "一次性插入并关联（极速）", batch_commit=True):
+    if not db_manager.execute_sql(sql_insert_all, "一次性插入并关联（极速）", batch_commit=True):
         return False
     
     return True
 
-def build_fact_promotion(conn, mode='full'):
+def build_fact_promotion(db_manager, mode='full'):
     """构建推广事实表（分步处理）"""
     log("3. 推广事实表")
     
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dwd_fact_promotion", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dwd_fact_promotion", "删除旧表")
     
     # 创建表结构
     sql_create = """
@@ -633,7 +466,7 @@ def build_fact_promotion(conn, mode='full'):
         INDEX idx_store_key (store_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_create, "创建表结构")
+    db_manager.execute_sql(sql_create, "创建表结构")
     
     # 一次性插入所有数据（含关联，避免UPDATE）
     sql_insert_all = """
@@ -654,17 +487,17 @@ def build_fact_promotion(conn, mode='full'):
     LEFT JOIN dim_product p ON pr.sku_id = p.sku_id
     WHERE pr.promotion_id IS NOT NULL
     """
-    if not execute_sql(conn, sql_insert_all, "插入推广数据（含关联）"):
+    if not db_manager.execute_sql(sql_insert_all, "插入推广数据（含关联）"):
         return False
     
     return True
 
-def build_fact_traffic(conn, mode='full'):
+def build_fact_traffic(db_manager, mode='full'):
     """构建流量事实表"""
     log("4. 流量事实表")
     
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dwd_fact_traffic", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dwd_fact_traffic", "删除旧表")
     
     sql_create = """
     CREATE TABLE dwd_fact_traffic (
@@ -686,7 +519,7 @@ def build_fact_traffic(conn, mode='full'):
         INDEX idx_store_key (store_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_create, "创建表结构")
+    db_manager.execute_sql(sql_create, "创建表结构")
     
     # 插入基础数据
     sql_insert = """
@@ -700,7 +533,7 @@ def build_fact_traffic(conn, mode='full'):
         CURDATE(), NOW()
     FROM ods_traffic WHERE date IS NOT NULL
     """
-    if not execute_sql(conn, sql_insert, "插入基础数据"):
+    if not db_manager.execute_sql(sql_insert, "插入基础数据"):
         return False
     
     # 关联店铺（通过临时表减少锁）
@@ -711,16 +544,16 @@ def build_fact_traffic(conn, mode='full'):
     INNER JOIN dim_store s ON t.store_id = s.store_id
     SET f.store_key = s.store_key
     """
-    execute_sql(conn, sql_update, "关联店铺维度")
+    db_manager.execute_sql(sql_update, "关联店铺维度")
     
     return True
 
-def build_fact_inventory(conn, mode='full'):
+def build_fact_inventory(db_manager, mode='full'):
     """构建库存事实表"""
     log("5. 库存事实表")
     
     if mode == 'full':
-        execute_sql(conn, "DROP TABLE IF EXISTS dwd_fact_inventory", "删除旧表")
+        db_manager.execute_sql("DROP TABLE IF EXISTS dwd_fact_inventory", "删除旧表")
     
     sql_create = """
     CREATE TABLE dwd_fact_inventory (
@@ -739,7 +572,7 @@ def build_fact_inventory(conn, mode='full'):
         INDEX idx_store_key (store_key)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """
-    execute_sql(conn, sql_create, "创建表结构")
+    db_manager.execute_sql(sql_create, "创建表结构")
     
     # 一次性插入所有数据（含关联，避免UPDATE）
     sql_insert_all = """
@@ -759,7 +592,7 @@ def build_fact_inventory(conn, mode='full'):
     LEFT JOIN dim_store s ON i.store_id = s.store_id
     WHERE i.inventory_id IS NOT NULL
     """
-    if not execute_sql(conn, sql_insert_all, "插入库存数据（含关联）"):
+    if not db_manager.execute_sql(sql_insert_all, "插入库存数据（含关联）"):
         return False
     
     return True
@@ -775,31 +608,32 @@ def transform_dwd(mode='full', db_config=None):
     print(f"批次大小: {BATCH_SIZE:,} 行")
     print("="*60)
     
-    conn = get_db_connection(db_config)
-    if not conn:
+    # 使用数据库管理器
+    db_manager = get_db_manager(db_config)
+    if not db_manager:
         return False
     
     try:
         # 第一步：构建DIM层维度表
-        if not build_dim_tables(conn, mode):
+        if not build_dim_tables(db_manager, mode):
             return False
         
         # 第二步：构建事实表（分步处理）
         log("【构建DWD事实表】")
         
-        if not build_fact_order(conn, mode):
+        if not build_fact_order(db_manager, mode):
             return False
         
-        if not build_fact_order_detail(conn, mode):
+        if not build_fact_order_detail(db_manager, mode):
             return False
         
-        if not build_fact_promotion(conn, mode):
+        if not build_fact_promotion(db_manager, mode):
             return False
         
-        if not build_fact_traffic(conn, mode):
+        if not build_fact_traffic(db_manager, mode):
             return False
         
-        if not build_fact_inventory(conn, mode):
+        if not build_fact_inventory(db_manager, mode):
             return False
         
         total_elapsed = time.time() - _start_time
@@ -818,14 +652,13 @@ def transform_dwd(mode='full', db_config=None):
         sys.stdout.flush()
         return False
     finally:
-        if conn:
-            conn.close()
+        db_manager.close()
 
 def main():
     """主函数"""
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    atexit.register(cleanup_connection)
+    atexit.register(cleanup_global_db_manager)
     
     config = {}
     if len(sys.argv) > 1:

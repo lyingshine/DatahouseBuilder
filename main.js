@@ -84,7 +84,7 @@ ipcMain.on('window-close', () => {
 // IPC 通信处理
 ipcMain.handle('generate-ods', async (event, config) => {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(appPath, 'scripts/generate_data.py');
+    const scriptPath = path.join(appPath, 'scripts/generate_ods_data.py');
     pythonProcess = spawn('python', [scriptPath, JSON.stringify(config)], {
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
     });

@@ -2,156 +2,20 @@
 ADS层转换 - 应用数据层
 面向业务的宽表和报表
 """
-import pymysql
 import sys
 import json
 import signal
 import atexit
 
-_global_connection = None
+# 导入数据库管理器
+from db_manager import get_db_manager, cleanup_global_db_manager
 
-def cleanup_connection():
-    """清理数据库连接并恢复全局配置"""
-    global _global_connection
-    if _global_connection:
-        try:
-            print("\n[清理] 正在恢复配置并释放连接...")
-            sys.stdout.flush()
-            
-            # 恢复全局配置
-            if hasattr(_global_connection, '_original_settings'):
-                cursor = _global_connection.cursor()
-                restored_count = 0
-                for var, value in _global_connection._original_settings.items():
-                    try:
-                        cursor.execute(f"SET GLOBAL {var} = {value}")
-                        restored_count += 1
-                    except:
-                        pass
-                cursor.close()
-                if restored_count > 0:
-                    print(f"[清理] ✓ 已恢复 {restored_count} 项全局配置")
-            
-            _global_connection.rollback()
-            _global_connection.close()
-            _global_connection = None
-            print("[清理] ✓ 连接已关闭")
-        except:
-            pass
 
 def signal_handler(signum, frame):
+    """处理中断信号"""
     print("\n\n[中断] 检测到用户中断...")
-    cleanup_connection()
+    cleanup_global_db_manager()
     sys.exit(1)
-
-import time
-
-def get_db_connection(db_config):
-    """获取数据库连接并应用极限优化"""
-    global _global_connection
-    try:
-        conn = pymysql.connect(
-            host=db_config['host'],
-            port=db_config['port'],
-            user=db_config['user'],
-            password=db_config['password'],
-            database=db_config['database'],
-            charset='utf8mb4'
-        )
-        _global_connection = conn
-        
-        cursor = conn.cursor()
-        
-        # 保存原始全局配置
-        original_settings = {}
-        
-        # 尝试设置全局变量（需要SUPER权限）
-        print("  尝试应用极致性能优化...")
-        global_optimizations = {
-            'innodb_flush_log_at_trx_commit': '0',
-            'sync_binlog': '0',
-            'innodb_doublewrite': '0',
-            'innodb_flush_neighbors': '0',
-            'innodb_io_capacity': '5000',
-            'innodb_io_capacity_max': '10000',
-            'innodb_read_io_threads': '20',
-            'innodb_write_io_threads': '20',
-            'max_connections': '2000',
-            'local_infile': '1',
-        }
-        
-        applied_count = 0
-        for var, value in global_optimizations.items():
-            try:
-                cursor.execute(f"SELECT @@GLOBAL.{var}")
-                result = cursor.fetchone()
-                if result:
-                    original_settings[var] = result[0]
-                cursor.execute(f"SET GLOBAL {var} = {value}")
-                applied_count += 1
-            except:
-                pass
-        
-        if applied_count > 0:
-            print(f"  ✓ 已应用 {applied_count} 项全局优化")
-        else:
-            print("  ℹ️ 无SUPER权限，使用会话级优化")
-        
-        # 会话级优化（极限配置）
-        cursor.execute("SET SESSION sql_mode = ''")
-        cursor.execute("SET SESSION foreign_key_checks = 0")
-        cursor.execute("SET SESSION unique_checks = 0")
-        cursor.execute("SET SESSION autocommit = 0")
-        cursor.execute("SET SESSION sort_buffer_size = 67108864")
-        cursor.execute("SET SESSION join_buffer_size = 67108864")
-        cursor.execute("SET SESSION read_buffer_size = 33554432")
-        cursor.execute("SET SESSION read_rnd_buffer_size = 33554432")
-        cursor.execute("SET SESSION tmp_table_size = 8589934592")
-        cursor.execute("SET SESSION max_heap_table_size = 8589934592")
-        cursor.execute("SET SESSION bulk_insert_buffer_size = 536870912")
-        cursor.execute("SET SESSION optimizer_switch = 'block_nested_loop=on,batched_key_access=on'")
-        
-        try:
-            cursor.execute("SET SESSION sql_log_bin = 0")
-        except:
-            pass
-        
-        conn.commit()
-        cursor.close()
-        print("  ✓ 会话级缓冲区已优化（极速模式）")
-        
-        conn._original_settings = original_settings
-        
-        return conn
-    except Exception as e:
-        print(f"数据库连接失败: {e}")
-        return None
-
-def execute_sql(conn, sql, description):
-    cursor = None
-    try:
-        print(f"  {description}...", end='', flush=True)
-        start_time = time.time()
-        cursor = conn.cursor()
-        cursor.execute(sql)
-        conn.commit()
-        elapsed = time.time() - start_time
-        affected_rows = cursor.rowcount
-        if affected_rows > 0 and elapsed > 0:
-            speed = int(affected_rows / elapsed)
-            print(f" ✓ {affected_rows:,} 行 ({elapsed:.1f}秒, {speed:,} 行/秒)")
-        else:
-            print(f" ✓ {affected_rows:,} 行 ({elapsed:.1f}秒)")
-        sys.stdout.flush()
-        return True
-    except Exception as e:
-        print(f" ✗ 失败: {e}")
-        sys.stdout.flush()
-        conn.rollback()
-        return False
-    finally:
-        if cursor:
-            cursor.close()
 
 
 def transform_ads(mode='full', db_config=None):
@@ -160,8 +24,9 @@ def transform_ads(mode='full', db_config=None):
     print("ADS层数据转换 - 业务宽表")
     print("="*60)
     
-    conn = get_db_connection(db_config)
-    if not conn:
+    # 使用数据库管理器
+    db_manager = get_db_manager(db_config)
+    if not db_manager:
         return False
     
     try:
@@ -169,7 +34,7 @@ def transform_ads(mode='full', db_config=None):
         print("\n【第一步】日报宽表")
         
         if mode == 'full':
-            execute_sql(conn, "DROP TABLE IF EXISTS ads_daily_report", "删除旧表")
+            db_manager.execute_sql("DROP TABLE IF EXISTS ads_daily_report", "删除旧表")
         
         # 新逻辑：先汇总推广数据，再关联销售数据，确保所有推广费都体现
         sql_daily_report = """
@@ -294,17 +159,17 @@ def transform_ads(mode='full', db_config=None):
         ) base
         ORDER BY base.`日期` DESC, base.`平台`, base.`店铺`
         """
-        if not execute_sql(conn, sql_daily_report, "创建日报宽表（包含所有推广费）"):
+        if not db_manager.execute_sql(sql_daily_report, "创建日报宽表（包含所有推广费）"):
             return False
         
-        execute_sql(conn, "ALTER TABLE ads_daily_report ADD INDEX idx_date (`日期`)", "创建日期索引")
-        execute_sql(conn, "ALTER TABLE ads_daily_report ADD INDEX idx_platform (`平台`)", "创建平台索引")
+        db_manager.execute_sql("ALTER TABLE ads_daily_report ADD INDEX idx_date (`日期`)", "创建日期索引")
+        db_manager.execute_sql("ALTER TABLE ads_daily_report ADD INDEX idx_platform (`平台`)", "创建平台索引")
         
         # ========== 2. 平台汇总表 ==========
         print("\n【第二步】平台汇总表")
         
         if mode == 'full':
-            execute_sql(conn, "DROP TABLE IF EXISTS ads_platform_summary", "删除旧表")
+            db_manager.execute_sql("DROP TABLE IF EXISTS ads_platform_summary", "删除旧表")
         
         sql_platform = """
         CREATE TABLE IF NOT EXISTS ads_platform_summary AS
@@ -324,13 +189,13 @@ def transform_ads(mode='full', db_config=None):
         GROUP BY `平台`
         ORDER BY `总销售额` DESC
         """
-        execute_sql(conn, sql_platform, "创建平台汇总表")
+        db_manager.execute_sql(sql_platform, "创建平台汇总表")
         
         # ========== 3. 店铺排行榜 ==========
         print("\n【第三步】店铺排行榜")
         
         if mode == 'full':
-            execute_sql(conn, "DROP TABLE IF EXISTS ads_store_ranking", "删除旧表")
+            db_manager.execute_sql("DROP TABLE IF EXISTS ads_store_ranking", "删除旧表")
         
         sql_store_rank = """
         CREATE TABLE IF NOT EXISTS ads_store_ranking AS
@@ -346,13 +211,13 @@ def transform_ads(mode='full', db_config=None):
         GROUP BY `平台`, `店铺`
         ORDER BY `总销售额` DESC
         """
-        execute_sql(conn, sql_store_rank, "创建店铺排行榜")
+        db_manager.execute_sql(sql_store_rank, "创建店铺排行榜")
         
         # ========== 4. 流量宽表（完整版：SPU维度 + 所有渠道）==========
         print("\n【第四步】流量宽表（SPU维度 + 所有渠道）")
         
         if mode == 'full':
-            execute_sql(conn, "DROP TABLE IF EXISTS ads_traffic_report", "删除旧表")
+            db_manager.execute_sql("DROP TABLE IF EXISTS ads_traffic_report", "删除旧表")
         
         # 先创建付费流量汇总（按SPU聚合）
         sql_paid_traffic = """
@@ -375,7 +240,7 @@ def transform_ads(mode='full', db_config=None):
         INNER JOIN dim_product p ON fp.product_key = p.product_key
         GROUP BY d.date_value, fp.platform, s.store_name, p.product_id, p.category_l1, p.category_l2, fp.channel
         """
-        execute_sql(conn, sql_paid_traffic, "创建付费流量临时表")
+        db_manager.execute_sql(sql_paid_traffic, "创建付费流量临时表")
         
         # 创建自然流量汇总（按SPU聚合）
         sql_natural_traffic = """
@@ -397,7 +262,7 @@ def transform_ads(mode='full', db_config=None):
         INNER JOIN dim_product p ON pt.sku_id = p.sku_id
         GROUP BY pt.date, pt.platform, s.store_name, p.product_id, p.category_l1, p.category_l2, pt.channel
         """
-        execute_sql(conn, sql_natural_traffic, "创建自然流量临时表")
+        db_manager.execute_sql(sql_natural_traffic, "创建自然流量临时表")
         
         # 创建销售数据汇总（按SPU聚合，直接从DWD层计算）- 用于付费流量
         # 只统计流量来源为"付费推广"的订单
@@ -419,7 +284,7 @@ def transform_ads(mode='full', db_config=None):
           AND f.traffic_source = '付费推广'
         GROUP BY d.date_value, f.platform, s.store_name, p.product_id
         """
-        execute_sql(conn, sql_sales_spu_paid, "创建SPU销售汇总临时表(付费)")
+        db_manager.execute_sql(sql_sales_spu_paid, "创建SPU销售汇总临时表(付费)")
         
         # 创建销售数据汇总（按SPU聚合，直接从DWD层计算）- 用于自然流量
         # 统计流量来源不是"付费推广"的订单
@@ -441,7 +306,7 @@ def transform_ads(mode='full', db_config=None):
           AND f.traffic_source != '付费推广'
         GROUP BY d.date_value, f.platform, s.store_name, p.product_id
         """
-        execute_sql(conn, sql_sales_spu_natural, "创建SPU销售汇总临时表(自然)")
+        db_manager.execute_sql(sql_sales_spu_natural, "创建SPU销售汇总临时表(自然)")
         
         # 先按 SPU 汇总流量，再分别关联对应的销量（避免重复计算）
         sql_traffic_report = """
@@ -521,21 +386,21 @@ def transform_ads(mode='full', db_config=None):
         
         ORDER BY `日期` DESC, `平台`, `店铺`, `SPU编码`, `流量类型`
         """
-        execute_sql(conn, sql_traffic_report, "创建流量宽表")
+        db_manager.execute_sql(sql_traffic_report, "创建流量宽表")
         
         # 添加索引（TEXT类型需要指定前缀长度）
-        execute_sql(conn, "ALTER TABLE ads_traffic_report ADD INDEX idx_date (`日期`(10))", "创建日期索引")
-        execute_sql(conn, "ALTER TABLE ads_traffic_report ADD INDEX idx_platform (`平台`(20))", "创建平台索引")
-        execute_sql(conn, "ALTER TABLE ads_traffic_report ADD INDEX idx_spu (`SPU编码`(50))", "创建SPU索引")
-        execute_sql(conn, "ALTER TABLE ads_traffic_report ADD INDEX idx_traffic_type (`流量类型`)", "创建流量类型索引")
+        db_manager.execute_sql("ALTER TABLE ads_traffic_report ADD INDEX idx_date (`日期`(10))", "创建日期索引")
+        db_manager.execute_sql("ALTER TABLE ads_traffic_report ADD INDEX idx_platform (`平台`(20))", "创建平台索引")
+        db_manager.execute_sql("ALTER TABLE ads_traffic_report ADD INDEX idx_spu (`SPU编码`(50))", "创建SPU索引")
+        db_manager.execute_sql("ALTER TABLE ads_traffic_report ADD INDEX idx_traffic_type (`流量类型`)", "创建流量类型索引")
         
         print("\n  注意：流量表已按 SPU 汇总，不再按流量渠道明细展示")
         
         # 清理临时表
-        execute_sql(conn, "DROP TEMPORARY TABLE IF EXISTS tmp_paid_traffic", "清理临时表")
-        execute_sql(conn, "DROP TEMPORARY TABLE IF EXISTS tmp_natural_traffic", "清理临时表")
-        execute_sql(conn, "DROP TEMPORARY TABLE IF EXISTS tmp_sales_spu_paid", "清理临时表")
-        execute_sql(conn, "DROP TEMPORARY TABLE IF EXISTS tmp_sales_spu_natural", "清理临时表")
+        db_manager.execute_sql("DROP TEMPORARY TABLE IF EXISTS tmp_paid_traffic", "清理临时表")
+        db_manager.execute_sql("DROP TEMPORARY TABLE IF EXISTS tmp_natural_traffic", "清理临时表")
+        db_manager.execute_sql("DROP TEMPORARY TABLE IF EXISTS tmp_sales_spu_paid", "清理临时表")
+        db_manager.execute_sql("DROP TEMPORARY TABLE IF EXISTS tmp_sales_spu_natural", "清理临时表")
         
         print("\n" + "="*60)
         print("✓ ADS层转换完成！")
@@ -546,13 +411,12 @@ def transform_ads(mode='full', db_config=None):
         print(f"✗ 转换失败: {e}")
         return False
     finally:
-        if conn:
-            conn.close()
+        db_manager.close()
 
 def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    atexit.register(cleanup_connection)
+    atexit.register(cleanup_global_db_manager)
     
     config = {}
     if len(sys.argv) > 1:
