@@ -733,11 +733,15 @@ def generate_orders(stores_df, products_df, users_df, num_orders=50000, time_spa
     
     return orders_df, order_details_df
 
-# 生成推广数据（优化版 - 批量生成）
-def generate_promotion(stores_df, products_df, time_span_days=365):
+# 生成推广数据（优化版 - 根据销售额反向计算推广费）
+def generate_promotion(stores_df, products_df, orders_df, time_span_days=365, target_promo_rate=0.065):
     """
-    生成推广投放数据
+    生成推广投放数据（根据目标推广费率反向计算）
+    stores_df: 店铺数据
+    products_df: 商品数据
+    orders_df: 订单数据（用于计算销售额）
     time_span_days: 时间跨度（天）
+    target_promo_rate: 目标推广费率（默认6.5%，在5-8%区间内）
     """
     promotions = []
     promo_id = 1
@@ -758,13 +762,31 @@ def generate_promotion(stores_df, products_df, time_span_days=365):
     for store_id in stores_df['店铺ID'].unique():
         store_products_map[store_id] = products_df[products_df['店铺ID'] == store_id]
     
-    # 预生成日期列表（根据时间跨度，与订单保持一致）
+    # 计算总销售额（已完成订单）
+    completed_orders = orders_df[orders_df['订单状态'] == '已完成']
+    total_sales = completed_orders['实付金额'].sum()
+    
+    # 根据目标推广费率计算总推广费
+    target_total_promo = total_sales * target_promo_rate
+    
+    print(f"   总销售额: {total_sales:,.2f}, 目标推广费: {target_total_promo:,.2f} ({target_promo_rate*100:.1f}%)")
+    
+    # 预生成日期列表
     dates = [datetime.now().date() - timedelta(days=i) for i in range(time_span_days)]
     
-    # 随机选择80%的店铺进行推广投放（提高推广覆盖率以达到5-8%推广费率）
-    total_stores = len(stores_df)
-    promo_store_count = int(total_stores * 0.8)
-    promo_stores = stores_df.sample(promo_store_count)
+    # 统计每个店铺的销售额（用于按比例分配推广费）
+    store_sales = completed_orders.groupby('店铺ID')['实付金额'].sum().to_dict()
+    
+    # 选择80%的店铺进行推广
+    promo_stores = stores_df.sample(int(len(stores_df) * 0.8))
+    
+    # 计算参与推广的店铺总销售额
+    promo_store_ids = set(promo_stores['店铺ID'])
+    promo_total_sales = sum(store_sales.get(sid, 0) for sid in promo_store_ids)
+    
+    if promo_total_sales == 0:
+        print("   警告：参与推广的店铺销售额为0")
+        return pd.DataFrame(promotions)
     
     for _, store in promo_stores.iterrows():
         store_id = store['店铺ID']
@@ -775,30 +797,49 @@ def generate_promotion(stores_df, products_df, time_span_days=365):
         if store_products is None or len(store_products) == 0:
             continue
         
-        # 品牌店推广力度更大（提高推广天数以达到5-8%推广费率）
-        promo_intensity = 0.50 if store_type == '品牌' else 0.35  # 推广天数占比
+        # 该店铺的销售额
+        store_sale = store_sales.get(store_id, 0)
+        if store_sale == 0:
+            continue
+        
+        # 该店铺应分配的推广费（按销售额比例）
+        store_promo_budget = target_total_promo * (store_sale / promo_total_sales)
+        
+        # 推广天数
+        promo_intensity = 0.50 if store_type == '品牌' else 0.35
         promo_days = random.sample(dates, int(len(dates) * promo_intensity))
         
+        if len(promo_days) == 0:
+            continue
+        
+        # 平均每天的推广费
+        daily_budget = store_promo_budget / len(promo_days)
+        
         for date in promo_days:
-            # 每天推广2-3个商品（提高推广商品数）
+            # 每天推广2-3个商品
             num_promo_products = random.randint(2, min(3, len(store_products)))
             promo_products = store_products.sample(num_promo_products)
             
+            # 每个商品分配的推广费
+            product_budget = daily_budget / num_promo_products
+            
             for _, product in promo_products.iterrows():
-                impressions = random.randint(5000, 20000)  # 提高曝光量
-                clicks = int(impressions * random.uniform(0.02, 0.04))  # 提高点击率
-                
-                # 推广花费：按每次点击成本(CPC)计算
-                # 调整CPC，让推广费占比在5-8%（合理区间）
+                # 根据预算反推曝光量和点击量
                 if product['一级类目'].startswith('整车'):
-                    cpc = random.uniform(1.2, 2.0)  # 整车类CPC: 1.2-2.0元
+                    cpc = random.uniform(1.2, 2.0)
                 else:
-                    cpc = random.uniform(0.8, 1.5)  # 配件类CPC: 0.8-1.5元
+                    cpc = random.uniform(0.8, 1.5)
                 
+                # 根据预算和CPC计算点击量
+                clicks = int(product_budget / cpc)
+                clicks = max(50, clicks)  # 最少50次点击
+                
+                # 根据点击率反推曝光量
+                ctr = random.uniform(0.02, 0.04)
+                impressions = int(clicks / ctr)
+                
+                # 实际推广费
                 promo_cost = round(clicks * cpc, 2)
-                
-                # 最低推广费50元（提高最低预算）
-                promo_cost = max(50, promo_cost)
                 
                 promotions.append({
                     '推广ID': f'PM{promo_id:08d}',
@@ -816,7 +857,12 @@ def generate_promotion(stores_df, products_df, time_span_days=365):
                 })
                 promo_id += 1
     
-    return pd.DataFrame(promotions)
+    promo_df = pd.DataFrame(promotions)
+    actual_promo_total = promo_df['推广花费'].sum()
+    actual_promo_rate = (actual_promo_total / total_sales * 100) if total_sales > 0 else 0
+    print(f"   实际推广费: {actual_promo_total:,.2f} ({actual_promo_rate:.2f}%)")
+    
+    return promo_df
 
 
 # 生成流量数据（优化版 - 批量生成）

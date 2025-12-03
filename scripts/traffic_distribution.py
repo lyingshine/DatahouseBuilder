@@ -50,15 +50,15 @@ def generate_product_traffic_batch(batch_data):
             natural_traffic = _generate_natural_traffic_static(product, date, weight, traffic_base)
             traffic_records.extend(natural_traffic)
             
-            # 付费流量（极低投放概率，严格控制推广费用）
-            # 主推新品和引流品：10%概率投放
-            # 其他商品：2%概率投放
+            # 付费流量（提高投放概率以达到5-8%推广费率）
+            # 主推新品和引流品：40%概率投放
+            # 其他商品：15%概率投放
             if tier in ['主推新品', '引流品']:
-                if random.random() < 0.10:  # 再降低：20% → 10%
+                if random.random() < 0.40:
                     paid_traffic = _generate_paid_traffic_static(product, date, weight, traffic_base)
                     traffic_records.extend(paid_traffic)
             else:
-                if random.random() < 0.02:  # 再降低：5% → 2%
+                if random.random() < 0.15:
                     paid_traffic = _generate_paid_traffic_static(product, date, weight, traffic_base)
                     traffic_records.extend(paid_traffic)
     
@@ -105,7 +105,7 @@ def _generate_natural_traffic_static(product, date, weight, traffic_base):
 
 
 def _generate_paid_traffic_static(product, date, weight, traffic_base):
-    """生成付费流量（静态方法，用于多进程）- 严格控制推广费用"""
+    """生成付费流量（静态方法，用于多进程）- 调整至5-8%推广费率"""
     records = []
     platform = product['平台']
     channels = PAID_CHANNELS.get(platform, ['通用推广'])
@@ -113,23 +113,23 @@ def _generate_paid_traffic_static(product, date, weight, traffic_base):
     
     base_factor = traffic_base / 1000
     
-    # 再次大幅降低付费流量的曝光量（降低到原来的1/50）
+    # 提高付费流量的曝光量
     if product['一级类目'].startswith('整车'):
-        base_impressions = int(random.uniform(50, 200) * weight * 0.3 * base_factor)
+        base_impressions = int(random.uniform(300, 800) * weight * base_factor)
     else:
-        base_impressions = int(random.uniform(20, 80) * weight * 0.3 * base_factor)
+        base_impressions = int(random.uniform(150, 400) * weight * base_factor)
     
-    ctr = random.uniform(0.015, 0.03)
+    ctr = random.uniform(0.02, 0.04)
     clicks = int(base_impressions * ctr)
     
-    # 进一步降低CPC成本
+    # 提高CPC成本以达到5-8%推广费率
     if product['一级类目'].startswith('整车'):
-        cpc = random.uniform(0.3, 0.6)  # 再降低：0.5-1.0 → 0.3-0.6
+        cpc = random.uniform(1.2, 2.0)  # 整车类CPC: 1.2-2.0元
     else:
-        cpc = random.uniform(0.2, 0.4)  # 再降低：0.3-0.6 → 0.2-0.4
+        cpc = random.uniform(0.8, 1.5)  # 配件类CPC: 0.8-1.5元
     
     cost = round(clicks * cpc, 2)
-    cost = max(5, cost)  # 再降低最低预算：10 → 5
+    cost = max(50, cost)  # 最低预算50元
     
     records.append({
         '日期': date,
