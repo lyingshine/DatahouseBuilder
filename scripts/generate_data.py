@@ -761,9 +761,9 @@ def generate_promotion(stores_df, products_df, time_span_days=365):
     # 预生成日期列表（根据时间跨度，与订单保持一致）
     dates = [datetime.now().date() - timedelta(days=i) for i in range(time_span_days)]
     
-    # 随机选择50%的店铺进行推广投放（降低推广覆盖率）
+    # 随机选择80%的店铺进行推广投放（提高推广覆盖率以达到5-8%推广费率）
     total_stores = len(stores_df)
-    promo_store_count = int(total_stores * 0.5)
+    promo_store_count = int(total_stores * 0.8)
     promo_stores = stores_df.sample(promo_store_count)
     
     for _, store in promo_stores.iterrows():
@@ -775,30 +775,30 @@ def generate_promotion(stores_df, products_df, time_span_days=365):
         if store_products is None or len(store_products) == 0:
             continue
         
-        # 品牌店推广力度更大
-        promo_intensity = 0.3 if store_type == '品牌' else 0.15  # 推广天数占比
+        # 品牌店推广力度更大（提高推广天数以达到5-8%推广费率）
+        promo_intensity = 0.50 if store_type == '品牌' else 0.35  # 推广天数占比
         promo_days = random.sample(dates, int(len(dates) * promo_intensity))
         
         for date in promo_days:
-            # 每天推广1-2个商品（降低推广商品数）
-            num_promo_products = random.randint(1, min(2, len(store_products)))
+            # 每天推广2-3个商品（提高推广商品数）
+            num_promo_products = random.randint(2, min(3, len(store_products)))
             promo_products = store_products.sample(num_promo_products)
             
             for _, product in promo_products.iterrows():
-                impressions = random.randint(3000, 15000)  # 降低曝光量
-                clicks = int(impressions * random.uniform(0.015, 0.03))  # 降低点击率
+                impressions = random.randint(5000, 20000)  # 提高曝光量
+                clicks = int(impressions * random.uniform(0.02, 0.04))  # 提高点击率
                 
                 # 推广花费：按每次点击成本(CPC)计算
-                # 大幅降低CPC，让推广费占比在5-8%（合理区间）
+                # 调整CPC，让推广费占比在5-8%（合理区间）
                 if product['一级类目'].startswith('整车'):
-                    cpc = random.uniform(0.8, 1.5)  # 整车类CPC: 0.8-1.5元
+                    cpc = random.uniform(1.2, 2.0)  # 整车类CPC: 1.2-2.0元
                 else:
-                    cpc = random.uniform(0.5, 1.0)  # 配件类CPC: 0.5-1元
+                    cpc = random.uniform(0.8, 1.5)  # 配件类CPC: 0.8-1.5元
                 
                 promo_cost = round(clicks * cpc, 2)
                 
-                # 最低推广费30元（降低最低预算）
-                promo_cost = max(30, promo_cost)
+                # 最低推广费50元（提高最低预算）
+                promo_cost = max(50, promo_cost)
                 
                 promotions.append({
                     '推广ID': f'PM{promo_id:08d}',
