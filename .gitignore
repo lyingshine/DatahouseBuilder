@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+data/ods/*.csv
+data/dwd/*.csv
+data/dws/*.csv
+scripts/__pycache__/
+*.pyc
+.vscode/
+.idea/
