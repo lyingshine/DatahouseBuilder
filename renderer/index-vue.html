@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'">
+  <title>电商数仓配置器</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    [v-cloak] { display: none; }
+  </style>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <!-- 自定义标题栏 -->
+    <div class="titlebar">
+      <div class="titlebar-drag">
+        <div class="titlebar-icon">⚡</div>
+        <div class="titlebar-title">电商数仓配置器</div>
+      </div>
+      <div class="titlebar-actions">
+        <button class="titlebar-action-btn" @click="showDbConfig" title="数据库配置">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <ellipse cx="7" cy="3" rx="5" ry="2" stroke="currentColor" stroke-width="1.5" fill="none"/>
+            <path d="M2 3v8c0 1.1 2.2 2 5 2s5-.9 5-2V3" stroke="currentColor" stroke-width="1.5" fill="none"/>
+            <path d="M2 7c0 1.1 2.2 2 5 2s5-.9 5-2" stroke="currentColor" stroke-width="1.5" fill="none"/>
+          </svg>
+        </button>
+        <button class="titlebar-action-btn" @click="showVerifyView" title="数据验证">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M12 4L5 11L2 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <button class="titlebar-action-btn" @click="showClear" title="清空数据">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M2 4h10M5 4V3a1 1 0 011-1h2a1 1 0 011 1v1M3 4v8a1 1 0 001 1h6a1 1 0 001-1V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div class="db-status" @click="showDbConfig" title="点击配置数据库">
+          <span class="db-status-dot" :class="{ connected: dbStatus.connected }"></span>
+          <span class="db-status-text">{{ dbStatus.text }}</span>
+        </div>
+      </div>
+      <div class="titlebar-controls">
+        <button class="titlebar-button" @click="minimizeWindow" title="最小化">
+          <svg width="12" height="12" viewBox="0 0 12 12">
+            <rect x="0" y="5" width="12" height="2" fill="currentColor"/>
+          </svg>
+        </button>
+        <button class="titlebar-button" @click="maximizeWindow" title="最大化">
+          <svg width="12" height="12" viewBox="0 0 12 12">
+            <rect x="0" y="0" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </button>
+        <button class="titlebar-button titlebar-close" @click="closeWindow" title="关闭">
+          <svg width="12" height="12" viewBox="0 0 12 12">
+            <path d="M1 1 L11 11 M11 1 L1 11" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- 应用容器 -->
+    <div class="app-container">
+      <!-- 主内容区 -->
+      <main class="main-content">
+        <!-- 数据验证视图 -->
+        <div v-if="currentView === 'verify'" class="verify-view">
+          <div class="verify-header">
+            <button class="btn-back" @click="hideVerifyView">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path d="M12 4L6 10L12 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              返回
+            </button>
+            <h2>数据一致性验证报告</h2>
+            <button class="btn btn-secondary" @click="startVerify" :disabled="verifyLoading">
+              🔄 刷新
+            </button>
+          </div>
+          <div class="verify-content" ref="verifyContent" v-html="verifyContent"></div>
+        </div>
+
+        <!-- 步骤卡片容器 -->
+        <div v-if="currentView === 'steps'" class="steps-container">
+          <div v-for="step in steps" :key="step.id" class="step-card">
+            <div class="step-bar" :style="{ background: step.color }"></div>
+            <div class="step-content">
+              <div class="step-header">
+                <div class="step-badge" :style="{ background: step.color }">{{ step.id + 1 }}</div>
+                <div class="step-info">
+                  <h3 class="step-title">{{ step.title }}</h3>
+                  <p class="step-desc">{{ step.desc }}</p>
+                </div>
+              </div>
+              <div class="step-divider"></div>
+              <div class="step-actions">
+                <button 
+                  class="btn btn-primary" 
+                  :style="{ background: step.color }"
+                  @click="executeStep(step.id)"
+                  :disabled="step.running"
+                >
+                  {{ step.running ? '⏳ 执行中...' : '▶ 执行' }}
+                </button>
+                <span class="step-status">{{ getStepIcon(step) }} {{ step.status }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- 生成数据配置对话框 -->
+    <div v-if="showGenerateDialog" class="dialog-overlay" @click.self="closeGenerate">
+      <div class="dialog dialog-large">
+        <div class="dialog-header">
+          <h2>生成模拟数据配置</h2>
+          <button class="dialog-close" @click="closeGenerate">✕</button>
+        </div>
+        <div class="dialog-content">
+          <div class="config-section">
+            <h3>🏢 企业体量选择</h3>
+            <div class="scale-selector">
+              <label class="scale-item">
+                <input type="radio" v-model="generateConfig.businessScale" value="微型企业">
+                <span>微型企业 (3-5家店铺)</span>
+              </label>
+              <label class="scale-item">
+                <input type="radio" v-model="generateConfig.businessScale" value="小型企业">
+                <span>小型企业 (6-10家店铺)</span>
+              </label>
+              <label class="scale-item">
+                <input type="radio" v-model="generateConfig.businessScale" value="中型企业">
+                <span>中型企业 (10-20家店铺)</span>
+              </label>
+              <label class="scale-item">
+                <input type="radio" v-model="generateConfig.businessScale" value="大型企业">
+                <span>大型企业 (20-50家店铺)</span>
+              </label>
+              <label class="scale-item">
+                <input type="radio" v-model="generateConfig.businessScale" value="超大型企业">
+                <span>超大型企业 (50+家店铺)</span>
+              </label>
+            </div>
+          </div>
+          <div class="config-section">
+            <h3>⏱️ 时间跨度设置</h3>
+            <div class="input-group">
+              <label>时间跨度（天）</label>
+              <input type="number" v-model.number="generateConfig.timeSpanDays" min="30" max="730" />
+              <span class="input-hint">建议：30-365天</span>
+            </div>
+          </div>
+          <div class="config-section">
+            <h3>📦 主营类目</h3>
+            <div class="category-selector">
+              <label class="category-item">
+                <input type="radio" v-model="generateConfig.mainCategory" value="bicycle">
+                <span>🚴 自行车电商</span>
+              </label>
+              <label class="category-item">
+                <input type="radio" v-model="generateConfig.mainCategory" value="clothing">
+                <span>👕 服装电商</span>
+              </label>
+              <label class="category-item">
+                <input type="radio" v-model="generateConfig.mainCategory" value="electronics">
+                <span>📱 数码电商</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-secondary" @click="closeGenerate">取消</button>
+          <button class="btn btn-primary" style="background: #48bb78;" @click="startGenerate">✓ 开始生成</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 清空数据对话框 -->
+    <div v-if="showClearDialog" class="dialog-overlay" @click.self="closeClear">
+      <div class="dialog">
+        <div class="dialog-header" style="background: #dc2626;">
+          <h2>⚠️ 清空数据</h2>
+          <button class="dialog-close" @click="closeClear">✕</button>
+        </div>
+        <div class="dialog-content">
+          <div class="warning-box">
+            <div class="warning-icon">⚠️</div>
+            <div class="warning-text">
+              <strong>警告：此操作不可恢复！</strong>
+              <p>请选择要清空的数据范围</p>
+            </div>
+          </div>
+          <div class="config-section">
+            <h3>清空范围</h3>
+            <div class="platform-item">
+              <input type="radio" v-model="clearConfig.clearType" value="all" id="clear-all">
+              <label for="clear-all">全部清空（本地文件 + 数据库表）</label>
+            </div>
+            <div class="platform-item">
+              <input type="radio" v-model="clearConfig.clearType" value="local" id="clear-local">
+              <label for="clear-local">仅清空本地CSV文件</label>
+            </div>
+            <div class="platform-item">
+              <input type="radio" v-model="clearConfig.clearType" value="database" id="clear-db">
+              <label for="clear-db">仅清空数据库表</label>
+            </div>
+          </div>
+          <div class="config-section">
+            <h3>清空模式</h3>
+            <div class="platform-item">
+              <input type="checkbox" v-model="clearConfig.fastMode" id="fast-mode">
+              <label for="fast-mode">⚡ 极速模式（DROP DATABASE 重建）</label>
+            </div>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-secondary" @click="closeClear">取消</button>
+          <button class="btn btn-danger" @click="confirmClear">🗑 确认清空</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 数据库配置对话框 -->
+    <div v-if="showDbConfigDialog" class="dialog-overlay" @click.self="closeDbConfig">
+      <div class="dialog">
+        <div class="dialog-header" style="background: #667eea;">
+          <h2>🗄️ 数据库配置</h2>
+          <button class="dialog-close" @click="closeDbConfig">✕</button>
+        </div>
+        <div class="dialog-content">
+          <div class="config-section">
+            <h3>连接信息</h3>
+            <div class="input-group">
+              <label>主机地址</label>
+              <input type="text" v-model="dbConfig.host" />
+            </div>
+            <div class="data-config-grid">
+              <div class="input-group">
+                <label>端口</label>
+                <input type="number" v-model.number="dbConfig.port" />
+              </div>
+              <div class="input-group">
+                <label>数据库名</label>
+                <input type="text" v-model="dbConfig.database" />
+              </div>
+            </div>
+            <div class="data-config-grid">
+              <div class="input-group">
+                <label>用户名</label>
+                <input type="text" v-model="dbConfig.user" />
+              </div>
+              <div class="input-group">
+                <label>密码</label>
+                <input type="password" v-model="dbConfig.password" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="dialog-footer">
+          <button class="btn btn-secondary" @click="closeDbConfig">取消</button>
+          <button class="btn btn-primary" style="background: #667eea;" @click="saveDbConfig">✓ 保存配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast通知容器 -->
+    <div class="toast-container">
+      <div 
+        v-for="toast in toasts" 
+        :key="toast.id"
+        class="toast"
+        :class="['toast-' + toast.type, { show: toast.show }]"
+        @click="removeToast(toast)"
+      >
+        <span class="toast-icon">
+          {{ toast.type === 'success' ? '✅' : toast.type === 'error' ? '❌' : toast.type === 'warning' ? '⚠️' : 'ℹ️' }}
+        </span>
+        <span class="toast-message">{{ toast.message }}</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="vue.global.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

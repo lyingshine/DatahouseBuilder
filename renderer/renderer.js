@@ -1149,16 +1149,26 @@ async function createOptimizedTables() {
   }
 }
 
-// 显示数据验证对话框
-function showVerifyDialog() {
-  document.getElementById('verify-log').innerHTML = '';
-  document.getElementById('verify-dialog').style.display = 'flex';
+// 显示数据验证视图
+function showVerifyView() {
+  document.getElementById('steps-container').style.display = 'none';
+  document.getElementById('verify-view').style.display = 'block';
+  // 延迟一下再开始验证，确保DOM已渲染
+  setTimeout(() => {
+    startVerifyInView();
+  }, 100);
 }
 
-// 开始数据验证
-async function startVerify() {
-  const logContainer = document.getElementById('verify-log');
-  logContainer.innerHTML = '<div class="log-line">⏳ 开始验证数据一致性...</div>';
+// 隐藏数据验证视图
+function hideVerifyView() {
+  document.getElementById('verify-view').style.display = 'none';
+  document.getElementById('steps-container').style.display = 'block';
+}
+
+// 在视图中开始验证
+async function startVerifyInView() {
+  const contentContainer = document.getElementById('verify-content');
+  contentContainer.innerHTML = '<div style="text-align: center; padding: 50px; color: #a1a1aa;"><div class="loading">⏳ 正在验证数据一致性...</div></div>';
   
   // 获取当前配置
   let businessScale = '小型企业';
@@ -1171,47 +1181,78 @@ async function startVerify() {
     console.log('无法加载配置，使用默认值');
   }
   
+  let isFirstMessage = true;
+  let messageCount = 0;
+  
   // 临时监听日志
   const logHandler = (event, message) => {
-    const logLine = document.createElement('div');
-    logLine.className = 'log-line';
+    messageCount++;
+    console.log(`收到消息 #${messageCount}:`, message.substring(0, 100));
     
-    if (message.includes('❌') || message.includes('✗') || message.includes('[错误]')) {
-      logLine.classList.add('log-error');
-    } else if (message.includes('✅') || message.includes('✓')) {
-      logLine.classList.add('log-success');
-    } else if (message.includes('⚠️')) {
-      logLine.classList.add('log-progress');
-    } else if (message.includes('===') || message.includes('【')) {
-      logLine.classList.add('log-info');
+    // 第一条消息时清空加载提示
+    if (isFirstMessage) {
+      contentContainer.innerHTML = '';
+      isFirstMessage = false;
     }
     
-    logLine.textContent = message;
-    logContainer.appendChild(logLine);
-    logContainer.parentElement.scrollTop = logContainer.parentElement.scrollHeight;
+    // 如果是HTML内容，直接插入
+    if (message.trim().startsWith('<')) {
+      contentContainer.insertAdjacentHTML('beforeend', message);
+    } else {
+      const logLine = document.createElement('div');
+      logLine.className = 'log-line';
+      
+      if (message.includes('❌') || message.includes('✗') || message.includes('[错误]')) {
+        logLine.classList.add('log-error');
+      } else if (message.includes('✅') || message.includes('✓')) {
+        logLine.classList.add('log-success');
+      } else if (message.includes('⚠️')) {
+        logLine.classList.add('log-progress');
+      } else if (message.includes('===') || message.includes('【')) {
+        logLine.classList.add('log-info');
+      }
+      
+      logLine.textContent = message;
+      contentContainer.appendChild(logLine);
+    }
+    contentContainer.scrollTop = contentContainer.scrollHeight;
   };
   
   ipcRenderer.on('log-message', logHandler);
   
   try {
+    console.log('开始验证，配置:', { businessScale });
     const result = await ipcRenderer.invoke('verify-data-consistency', {
       dbConfig: getDbConfig(),
       dataDir: 'data/ods',
       businessScale: businessScale
     });
     
+    console.log('验证结果:', result);
+    console.log('总共收到消息数:', messageCount);
+    
     if (result.success) {
       showToast('数据验证完成！', 'success');
+    } else {
+      contentContainer.innerHTML = `<div style="text-align: center; padding: 50px; color: #f87171; font-size: 16px;">❌ 验证失败: ${result.message || '未知错误'}</div>`;
     }
   } catch (error) {
-    const logLine = document.createElement('div');
-    logLine.className = 'log-line log-error';
-    logLine.textContent = `验证失败: ${error.message}`;
-    logContainer.appendChild(logLine);
+    console.error('验证异常:', error);
+    contentContainer.innerHTML = `<div style="text-align: center; padding: 50px; color: #f87171; font-size: 16px;">❌ 验证失败: ${error.message}</div>`;
     showToast('验证失败', 'error');
   } finally {
     ipcRenderer.removeListener('log-message', logHandler);
   }
+}
+
+// 显示数据验证对话框（保留兼容）
+function showVerifyDialog() {
+  showVerifyView();
+}
+
+// 开始数据验证（保留兼容）
+async function startVerify() {
+  await startVerifyInView();
 }
 
 // 应用MySQL优化配置

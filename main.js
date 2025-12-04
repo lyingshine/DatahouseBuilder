@@ -33,11 +33,29 @@ function createWindow() {
     icon: path.join(resourcesPath, 'build/icon.png')
   });
 
-  mainWindow.loadFile('renderer/index.html');
+  mainWindow.loadFile('renderer/index-vue.html');
 
-  // 开发模式下打开开发者工具
+  // 开发模式下打开开发者工具和热重载
   if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
+    
+    // 热重载功能（可选）
+    try {
+      const chokidar = require('chokidar');
+      const watcher = chokidar.watch(['renderer/**/*.html', 'renderer/**/*.js', 'renderer/**/*.css'], {
+        ignored: /node_modules/,
+        persistent: true
+      });
+      
+      watcher.on('change', (filePath) => {
+        console.log(`文件变化: ${filePath}, 重新加载...`);
+        mainWindow.reload();
+      });
+      
+      console.log('热重载已启用');
+    } catch (error) {
+      console.log('热重载未启用（chokidar 未安装）');
+    }
   }
 
   mainWindow.on('closed', () => {

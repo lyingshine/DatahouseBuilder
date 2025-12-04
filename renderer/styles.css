@@ -1876,3 +1876,204 @@ body {
   color: #a1a1aa;
   margin-bottom: 8px;
 }
+
+/* 数据验证视图 */
+.verify-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #1a1a1a;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+
+.verify-header {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  padding: 15px 25px;
+  background: #27272a;
+  border-bottom: 1px solid #3f3f46;
+  flex-shrink: 0;
+  height: 60px;
+  position: relative;
+  z-index: 20;
+}
+
+.verify-header h2 {
+  flex: 1;
+  font-size: 20px;
+  font-weight: 600;
+  color: #e4e4e7;
+  margin: 0;
+}
+
+.btn-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: #3f3f46;
+  color: #e4e4e7;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-back:hover {
+  background: #52525b;
+  transform: translateX(-2px);
+}
+
+.btn-back svg {
+  stroke: currentColor;
+}
+
+.verify-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0;
+  background: #1a1a1a;
+  position: relative;
+}
+
+.verify-content > * {
+  padding: 20px 25px;
+}
+
+.verify-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.verify-content::-webkit-scrollbar-track {
+  background: #27272a;
+  border-radius: 4px;
+}
+
+.verify-content::-webkit-scrollbar-thumb {
+  background: #52525b;
+  border-radius: 4px;
+}
+
+.verify-content::-webkit-scrollbar-thumb:hover {
+  background: #71717a;
+}
+
+/* Vue 特定样式 */
+.scale-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scale-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.scale-item:hover {
+  background: #3f3f46;
+  border-color: #667eea;
+}
+
+.scale-item input[type="radio"] {
+  cursor: pointer;
+}
+
+.category-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.category-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.category-item:hover {
+  background: #3f3f46;
+  border-color: #667eea;
+}
+
+.category-item input[type="radio"] {
+  cursor: pointer;
+}
+
+.warning-box {
+  display: flex;
+  gap: 15px;
+  padding: 15px;
+  background: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
+
+.warning-icon {
+  font-size: 24px;
+}
+
+.warning-text strong {
+  color: #f87171;
+  display: block;
+  margin-bottom: 5px;
+}
+
+.warning-text p {
+  color: #a1a1aa;
+  margin: 0;
+}
+
+.platform-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.platform-item input[type="radio"],
+.platform-item input[type="checkbox"] {
+  cursor: pointer;
+}
+
+.platform-item label {
+  cursor: pointer;
+  color: #e4e4e7;
+}
+
+.input-hint {
+  font-size: 12px;
+  color: #a1a1aa;
+  margin-top: 5px;
+}
+
+.btn-danger {
+  background: #dc2626;
+  color: white;
+}
+
+.btn-danger:hover {
+  background: #b91c1c;
+}

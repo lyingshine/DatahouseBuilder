@@ -10,10 +10,15 @@
     "build:dir": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --x64 --dir",
     "build:portable": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win portable"
   },
-  "keywords": ["electron", "data-warehouse", "ecommerce"],
+  "keywords": [
+    "electron",
+    "data-warehouse",
+    "ecommerce"
+  ],
   "author": "DataWarehouse Team",
   "license": "MIT",
   "devDependencies": {
+    "chokidar": "^5.0.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1"
   },
@@ -44,7 +49,9 @@
       "target": [
         {
           "target": "dir",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icon.ico",

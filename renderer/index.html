@@ -28,7 +28,7 @@
           <path d="M7 4v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
       </button>
-      <button class="titlebar-action-btn" onclick="showVerifyDialog()" title="数据验证">
+      <button class="titlebar-action-btn" onclick="showVerifyView()" title="数据验证">
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
           <path d="M12 4L5 11L2 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -67,8 +67,23 @@
 
   <!-- 主内容区 -->
   <main class="main-content">
+    <!-- 数据验证视图 -->
+    <div id="verify-view" class="verify-view" style="display: none;">
+      <div class="verify-header">
+        <button class="btn-back" onclick="hideVerifyView()">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <path d="M12 4L6 10L12 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          返回
+        </button>
+        <h2>数据一致性验证报告</h2>
+        <button class="btn btn-secondary" onclick="startVerifyInView()">🔄 刷新</button>
+      </div>
+      <div class="verify-content" id="verify-content"></div>
+    </div>
+
     <!-- 步骤卡片容器 -->
-    <div class="steps-container">
+    <div class="steps-container" id="steps-container">
       <!-- 步骤 1: ODS -->
       <div class="step-card" data-step="0">
         <div class="step-bar" style="background: #48bb78;"></div>

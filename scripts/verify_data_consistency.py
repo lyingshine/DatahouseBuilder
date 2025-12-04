@@ -1,7 +1,7 @@
 """
 数据一致性验证脚本
-验证设计数据-CSV数据-数据库数据三方是否一致
-包括：订单、推广、财务指标（毛利率、推广费率、净利率）
+验证CSV-ODS-DWD-DWS-ADS五层数据一致性
+使用表格显示所有字段的数值对比
 """
 import pymysql
 import pandas as pd
@@ -23,323 +23,467 @@ def get_db_connection(db_config):
 
 def log(message):
     """输出日志"""
-    print(message)
-    sys.stdout.flush()
+    print(message, flush=True)
 
-def get_design_metrics(config):
-    """获取设计预期指标"""
-    business_scale = config.get('businessScale', '小型企业')
+def collect_all_metrics(csv_orders_path, csv_promo_path, db_config):
+    """收集CSV-ODS-DWD-DWS-ADS五层的所有指标"""
+    metrics = {}
     
-    # 设计预期的财务指标范围（调整后合理的指标）
-    design_ranges = {
-        '微型企业': {'毛利率': (30, 37), '推广费率': (5, 8), '净利率': (7, 12)},
-        '小型企业': {'毛利率': (30, 37), '推广费率': (5, 8), '净利率': (7, 12)},
-        '中型企业': {'毛利率': (30, 37), '推广费率': (5, 8), '净利率': (7, 12)},
-        '大型企业': {'毛利率': (30, 37), '推广费率': (5, 8), '净利率': (7, 12)},
-        '超大型企业': {'毛利率': (30, 37), '推广费率': (5, 8), '净利率': (7, 12)},
-    }
-    
-    return design_ranges.get(business_scale, design_ranges['小型企业'])
-
-def verify_orders_consistency(csv_path, db_config):
-    """验证订单数据一致性"""
-    log('\n【订单数据验证】')
-    
-    # 读取CSV
+    # ========== CSV层 ==========
     try:
-        csv_df = pd.read_csv(csv_path, encoding='utf-8-sig')
-        csv_completed = csv_df[csv_df['订单状态'] == '已完成']
+        orders_df = pd.read_csv(csv_orders_path, encoding='utf-8-sig')
+        promo_df = pd.read_csv(csv_promo_path, encoding='utf-8-sig')
+        completed = orders_df[orders_df['订单状态'] == '已完成']
         
-        csv_metrics = {
-            '订单数': len(csv_completed),
-            '销售额': csv_completed['实付金额'].sum(),
-            '成本': csv_completed['成本总额'].sum(),
+        metrics['CSV'] = {
+            '订单数': len(completed),
+            '销售额': completed['实付金额'].sum(),
+            '成本': completed['成本总额'].sum(),
+            '运费': completed['运费'].sum(),
+            '推广费': promo_df['推广花费'].sum(),
+            '销量': 0,  # CSV层没有销量
         }
-        log(f'  CSV: 订单数={csv_metrics["订单数"]:,}, 销售额={csv_metrics["销售额"]:,.2f}')
     except Exception as e:
-        log(f'  ❌ CSV读取失败: {e}')
-        return False
+        log(f'❌ CSV读取失败: {e}')
+        metrics['CSV'] = None
     
-    # 查询数据库
+    # ========== 数据库层 ==========
     try:
         conn = get_db_connection(db_config)
         cursor = conn.cursor()
         
+        # ODS层
         cursor.execute('''
-            SELECT COUNT(*) as cnt, SUM(final_amount) as sales, SUM(total_cost) as cost
+            SELECT COUNT(*) as cnt, SUM(final_amount), SUM(total_cost), SUM(shipping_fee)
             FROM ods_orders WHERE order_status = '已完成'
         ''')
         row = cursor.fetchone()
         
-        db_metrics = {
+        cursor.execute('''
+            SELECT SUM(od.quantity)
+            FROM ods_order_details od
+            INNER JOIN ods_orders o ON od.order_id = o.order_id
+            WHERE o.order_status = '已完成'
+        ''')
+        qty_row = cursor.fetchone()
+        
+        cursor.execute('SELECT SUM(cost) FROM ods_promotion')
+        promo_row = cursor.fetchone()
+        
+        metrics['ODS'] = {
             '订单数': row[0] or 0,
             '销售额': float(row[1]) if row[1] else 0,
             '成本': float(row[2]) if row[2] else 0,
+            '运费': float(row[3]) if row[3] else 0,
+            '推广费': float(promo_row[0]) if promo_row[0] else 0,
+            '销量': int(qty_row[0]) if qty_row[0] else 0,
         }
-        log(f'  DB:  订单数={db_metrics["订单数"]:,}, 销售额={db_metrics["销售额"]:,.2f}')
+        
+        # DWD层
+        try:
+            cursor.execute('SHOW TABLES LIKE "fact_order"')
+            if cursor.fetchone():
+                cursor.execute('''
+                    SELECT COUNT(*) as cnt, SUM(final_amount), SUM(total_cost), SUM(shipping_fee)
+                    FROM fact_order WHERE order_status = '已完成'
+                ''')
+                row = cursor.fetchone()
+                
+                cursor.execute('SELECT SUM(quantity) FROM fact_order_detail')
+                qty_row = cursor.fetchone()
+                
+                cursor.execute('SELECT SUM(cost) FROM fact_promotion')
+                promo_row = cursor.fetchone()
+                
+                metrics['DWD'] = {
+                    '订单数': row[0] or 0,
+                    '销售额': float(row[1]) if row[1] else 0,
+                    '成本': float(row[2]) if row[2] else 0,
+                    '运费': float(row[3]) if row[3] else 0,
+                    '推广费': float(promo_row[0]) if promo_row[0] else 0,
+                    '销量': int(qty_row[0]) if qty_row[0] else 0,
+                }
+            else:
+                metrics['DWD'] = None
+        except Exception as e:
+            log(f'⚠️  DWD层查询失败: {e}')
+            metrics['DWD'] = None
+        
+        # DWS层
+        try:
+            cursor.execute('SHOW TABLES LIKE "dws_sales_daily"')
+            if cursor.fetchone():
+                cursor.execute('SELECT SUM(sales_amount), SUM(cost_amount) FROM dws_sales_daily')
+                row = cursor.fetchone()
+                
+                cursor.execute('SELECT SUM(sales_quantity) FROM dws_product_daily')
+                qty_row = cursor.fetchone()
+                
+                cursor.execute('SELECT SUM(cost) FROM dws_promotion_daily')
+                promo_row = cursor.fetchone()
+                
+                cursor.execute('SELECT SUM(order_count) FROM dws_sales_daily')
+                order_row = cursor.fetchone()
+                
+                metrics['DWS'] = {
+                    '订单数': order_row[0] or 0,
+                    '销售额': float(row[0]) if row[0] else 0,
+                    '成本': float(row[1]) if row[1] else 0,
+                    '运费': 0,  # DWS层没有运费
+                    '推广费': float(promo_row[0]) if promo_row[0] else 0,
+                    '销量': int(qty_row[0]) if qty_row[0] else 0,
+                }
+            else:
+                metrics['DWS'] = None
+        except Exception as e:
+            log(f'⚠️  DWS层查询失败: {e}')
+            metrics['DWS'] = None
+        
+        # ADS层
+        try:
+            cursor.execute('SHOW TABLES LIKE "ads_daily_report"')
+            if cursor.fetchone():
+                cursor.execute('SELECT SUM(`销售额`), SUM(`推广费`), SUM(`订单数`), SUM(`销量`) FROM ads_daily_report')
+                row = cursor.fetchone()
+                metrics['ADS'] = {
+                    '订单数': int(row[2]) if row[2] else 0,
+                    '销售额': float(row[0]) if row[0] else 0,
+                    '成本': 0,  # ADS层没有成本
+                    '运费': 0,  # ADS层没有运费
+                    '推广费': float(row[1]) if row[1] else 0,
+                    '销量': int(row[3]) if row[3] else 0,
+                }
+            else:
+                metrics['ADS'] = None
+        except Exception as e:
+            log(f'⚠️  ADS层查询失败: {e}')
+            metrics['ADS'] = None
         
         conn.close()
+        
     except Exception as e:
-        log(f'  ❌ 数据库查询失败: {e}')
-        return False
+        log(f'❌ 数据库查询失败: {e}')
+        import traceback
+        traceback.print_exc()
+        return None
     
-    # 对比
-    orders_match = csv_metrics['订单数'] == db_metrics['订单数']
-    sales_match = abs(csv_metrics['销售额'] - db_metrics['销售额']) < 1
-    
-    if orders_match and sales_match:
-        log('  ✅ 订单数据一致')
-        return True
-    else:
-        log(f'  ❌ 订单数据不一致')
-        if not orders_match:
-            log(f'     订单数差异: {abs(csv_metrics["订单数"] - db_metrics["订单数"])}')
-        if not sales_match:
-            log(f'     销售额差异: {abs(csv_metrics["销售额"] - db_metrics["销售额"]):,.2f}')
-        return False
+    return metrics
 
-def verify_promotion_consistency(csv_path, db_config):
-    """验证推广数据一致性"""
-    log('\n【推广数据验证】')
+def print_html_table(headers, rows, title=""):
+    """打印HTML格式的表格"""
+    html = f'''
+<div class="verification-table">
+    <h3>{title}</h3>
+    <table>
+        <thead>
+            <tr>
+'''
+    for i, header in enumerate(headers):
+        html += f'                <th>{header}</th>\n'
     
-    # 读取CSV
-    try:
-        csv_df = pd.read_csv(csv_path, encoding='utf-8-sig')
-        csv_metrics = {
-            '记录数': len(csv_df),
-            '推广费': csv_df['推广花费'].sum(),
-        }
-        log(f'  CSV: 记录数={csv_metrics["记录数"]:,}, 推广费={csv_metrics["推广费"]:,.2f}')
-    except Exception as e:
-        log(f'  ❌ CSV读取失败: {e}')
-        return False
+    html += '''            </tr>
+        </thead>
+        <tbody>
+'''
     
-    # 查询数据库
-    try:
-        conn = get_db_connection(db_config)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT COUNT(*) as cnt, SUM(cost) as total FROM ods_promotion')
-        row = cursor.fetchone()
-        
-        db_metrics = {
-            '记录数': row[0] or 0,
-            '推广费': float(row[1]) if row[1] else 0,
-        }
-        log(f'  DB:  记录数={db_metrics["记录数"]:,}, 推广费={db_metrics["推广费"]:,.2f}')
-        
-        conn.close()
-    except Exception as e:
-        log(f'  ❌ 数据库查询失败: {e}')
-        return False
+    for row in rows:
+        html += '            <tr>\n'
+        for i, cell in enumerate(row):
+            html += f'                <td>{cell}</td>\n'
+        html += '            </tr>\n'
     
-    # 对比
-    count_match = csv_metrics['记录数'] == db_metrics['记录数']
-    cost_match = abs(csv_metrics['推广费'] - db_metrics['推广费']) < 1
-    
-    if count_match and cost_match:
-        log('  ✅ 推广数据一致')
-        return True
-    else:
-        log(f'  ❌ 推广数据不一致')
-        if not count_match:
-            log(f'     记录数差异: {abs(csv_metrics["记录数"] - db_metrics["记录数"])}')
-        if not cost_match:
-            log(f'     推广费差异: {abs(csv_metrics["推广费"] - db_metrics["推广费"]):,.2f}')
-        return False
+    html += '''        </tbody>
+    </table>
+</div>
+'''
+    log(html)
 
-def verify_financial_metrics(csv_orders_path, csv_promo_path, db_config, design_ranges):
-    """验证财务指标（毛利率、推广费率、净利率）"""
-    log('\n【财务指标验证】')
+def display_metrics_table(metrics):
+    """使用表格显示五层数据对比"""
+    # CSS样式 - 深色主题，与程序融为一体
+    log('''
+<style>
+.verification-report {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif;
+    line-height: 1.8;
+    color: #e4e4e7;
+    background: transparent;
+    min-height: 100%;
+    height: auto;
+    padding: 20px 25px;
+}
+.verification-table {
+    margin: 16px 0;
+}
+.verification-table h3 {
+    color: #e4e4e7;
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #667eea;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.verification-table table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: #27272a;
+    border-radius: 8px;
+    overflow: visible;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    table-layout: auto;
+}
+.verification-table th {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: #fff;
+    padding: 16px 12px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid #52525b;
+}
+.verification-table td {
+    padding: 14px 12px;
+    text-align: right;
+    border-bottom: 1px solid #3f3f46;
+    font-size: 15px;
+    font-weight: 500;
+    color: #e4e4e7;
+    background: #27272a;
+    font-family: 'Consolas', 'Monaco', monospace;
+}
+.verification-table td:first-child {
+    font-weight: 600;
+    color: #fbbf24;
+    background: #1f1f23;
+    text-align: left;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif;
+    font-size: 15px;
+}
+.verification-table tbody tr:hover td {
+    background: #3f3f46;
+}
+.verification-table tbody tr:last-child td {
+    border-bottom: none;
+}
+.status-section {
+    margin: 16px 0;
+    padding: 16px;
+    border-radius: 8px;
+    background: #27272a;
+    border: 1px solid #3f3f46;
+}
+.status-section h3 {
+    color: #e4e4e7;
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.status-item {
+    padding: 12px 16px;
+    font-size: 15px;
+    margin: 10px 0;
+    border-radius: 6px;
+    background: #1f1f23;
+    border: 1px solid #3f3f46;
+}
+.status-item strong {
+    font-size: 16px;
+    color: #fbbf24;
+    display: block;
+    margin-bottom: 10px;
+}
+.status-pass { 
+    color: #4ade80;
+    font-weight: 600;
+    padding: 6px 12px;
+    background: rgba(74, 222, 128, 0.1);
+    border: 1px solid rgba(74, 222, 128, 0.3);
+    border-radius: 4px;
+    display: inline-block;
+    margin: 4px 6px 4px 0;
+    font-size: 14px;
+}
+.status-fail { 
+    color: #f87171;
+    font-weight: 600;
+    padding: 6px 12px;
+    background: rgba(248, 113, 113, 0.1);
+    border: 1px solid rgba(248, 113, 113, 0.3);
+    border-radius: 4px;
+    display: inline-block;
+    margin: 4px 6px 4px 0;
+    font-size: 14px;
+}
+.summary-box {
+    margin: 16px 0;
+    padding: 20px;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 18px;
+    font-weight: 600;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.summary-success {
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.15) 0%, rgba(34, 197, 94, 0.15) 100%);
+    color: #4ade80;
+    border: 2px solid rgba(74, 222, 128, 0.3);
+}
+.summary-warning {
+    background: linear-gradient(135deg, rgba(248, 113, 113, 0.15) 0%, rgba(239, 68, 68, 0.15) 100%);
+    color: #f87171;
+    border: 2px solid rgba(248, 113, 113, 0.3);
+}
+.report-header {
+    padding: 12px 16px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 6px;
+    margin: 0 0 16px 0;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+</style>
+''')
     
-    try:
-        # 读取CSV数据
-        orders_df = pd.read_csv(csv_orders_path, encoding='utf-8-sig')
-        promo_df = pd.read_csv(csv_promo_path, encoding='utf-8-sig')
+    # 准备表格数据
+    fields = ['订单数', '销售额', '成本', '运费', '推广费', '销量']
+    layers = ['CSV', 'ODS', 'DWD', 'DWS', 'ADS']
+    
+    table_data = []
+    for field in fields:
+        row = [field]
+        for layer in layers:
+            if metrics.get(layer) is None:
+                row.append('-')
+            else:
+                value = metrics[layer].get(field, 0)
+                if field == '订单数' or field == '销量':
+                    row.append(f'{value:,}')
+                else:
+                    row.append(f'{value:,.2f}')
+        table_data.append(row)
+    
+    # 显示表格
+    headers = ['指标'] + layers
+    print_html_table(headers, table_data, '数据一致性对比表')
+    
+    # 计算衍生指标
+    financial_data = []
+    for layer in layers:
+        if metrics.get(layer) is None:
+            continue
         
-        completed = orders_df[orders_df['订单状态'] == '已完成']
-        
-        # CSV计算（按照文档公式）
-        csv_sales = completed['实付金额'].sum()
-        csv_cost = completed['成本总额'].sum()
-        csv_shipping = completed['运费'].sum()
-        csv_promo = promo_df['推广花费'].sum()
+        m = metrics[layer]
+        sales = m.get('销售额', 0)
+        cost = m.get('成本', 0)
+        shipping = m.get('运费', 0)
+        promo = m.get('推广费', 0)
         
         # 毛利 = 销售额 - 成本 - 运费
-        csv_gross_profit = csv_sales - csv_cost - csv_shipping
+        gross_profit = sales - cost - shipping
+        gross_rate = (gross_profit / sales * 100) if sales > 0 else 0
         
-        # 其他费用（按销售额比例）
-        csv_after_sales = csv_sales * 0.02  # 售后费 2%
-        csv_platform_fee = csv_sales * 0.05  # 平台费 5%
-        csv_management = csv_sales * 0.10  # 管理费 10%
-        
-        # 净利润 = 毛利 - 推广费 - 售后费 - 平台费 - 管理费
-        csv_net_profit = csv_gross_profit - csv_promo - csv_after_sales - csv_platform_fee - csv_management
-        
-        csv_gross_rate = (csv_gross_profit / csv_sales * 100) if csv_sales > 0 else 0
-        csv_promo_rate = (csv_promo / csv_sales * 100) if csv_sales > 0 else 0
-        csv_net_rate = (csv_net_profit / csv_sales * 100) if csv_sales > 0 else 0
-        
-        log(f'  CSV数据:')
-        log(f'    销售额: {csv_sales:,.2f}')
-        log(f'    成本: {csv_cost:,.2f}')
-        log(f'    运费: {csv_shipping:,.2f}')
-        log(f'    毛利: {csv_gross_profit:,.2f} (毛利率: {csv_gross_rate:.2f}%)')
-        log(f'    推广费: {csv_promo:,.2f} (推广费率: {csv_promo_rate:.2f}%)')
-        log(f'    售后费: {csv_after_sales:,.2f} (2%)')
-        log(f'    平台费: {csv_platform_fee:,.2f} (5%)')
-        log(f'    管理费: {csv_management:,.2f} (10%)')
-        log(f'    净利润: {csv_net_profit:,.2f} (净利率: {csv_net_rate:.2f}%)')
-        
-        # 数据库计算
-        conn = get_db_connection(db_config)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT SUM(final_amount), SUM(total_cost), SUM(shipping_fee)
-            FROM ods_orders WHERE order_status = '已完成'
-        ''')
-        row = cursor.fetchone()
-        db_sales = float(row[0] or 0)
-        db_cost = float(row[1] or 0)
-        db_shipping = float(row[2] or 0)
-        
-        cursor.execute('SELECT SUM(cost) FROM ods_promotion')
-        db_promo = float(cursor.fetchone()[0] or 0)
-        
-        # 毛利 = 销售额 - 成本 - 运费
-        db_gross_profit = db_sales - db_cost - db_shipping
+        # 推广费率
+        promo_rate = (promo / sales * 100) if sales > 0 else 0
         
         # 其他费用
-        db_after_sales = db_sales * 0.02
-        db_platform_fee = db_sales * 0.05
-        db_management = db_sales * 0.10
+        after_sales = sales * 0.02
+        platform_fee = sales * 0.05
+        management = sales * 0.10
         
-        # 净利润 = 毛利 - 推广费 - 售后费 - 平台费 - 管理费
-        db_net_profit = db_gross_profit - db_promo - db_after_sales - db_platform_fee - db_management
+        # 净利润
+        net_profit = gross_profit - promo - after_sales - platform_fee - management
+        net_rate = (net_profit / sales * 100) if sales > 0 else 0
         
-        db_gross_rate = (db_gross_profit / db_sales * 100) if db_sales > 0 else 0
-        db_promo_rate = (db_promo / db_sales * 100) if db_sales > 0 else 0
-        db_net_rate = (db_net_profit / db_sales * 100) if db_sales > 0 else 0
-        
-        log(f'  数据库:')
-        log(f'    销售额: {db_sales:,.2f}')
-        log(f'    成本: {db_cost:,.2f}')
-        log(f'    运费: {db_shipping:,.2f}')
-        log(f'    毛利: {db_gross_profit:,.2f} (毛利率: {db_gross_rate:.2f}%)')
-        log(f'    推广费: {db_promo:,.2f} (推广费率: {db_promo_rate:.2f}%)')
-        log(f'    售后费: {db_after_sales:,.2f} (2%)')
-        log(f'    平台费: {db_platform_fee:,.2f} (5%)')
-        log(f'    管理费: {db_management:,.2f} (10%)')
-        log(f'    净利润: {db_net_profit:,.2f} (净利率: {db_net_rate:.2f}%)')
-        
-        conn.close()
-        
-        # 设计预期验证
-        log(f'  设计预期:')
-        log(f'    毛利率: {design_ranges["毛利率"][0]}-{design_ranges["毛利率"][1]}%')
-        log(f'    推广费率: {design_ranges["推广费率"][0]}-{design_ranges["推广费率"][1]}%')
-        log(f'    净利率: {design_ranges["净利率"][0]}-{design_ranges["净利率"][1]}%')
-        
-        # 验证
-        all_pass = True
-        
-        # CSV vs DB
-        if abs(csv_gross_rate - db_gross_rate) > 0.5:
-            log(f'  ❌ 毛利率不一致: CSV={csv_gross_rate:.2f}%, DB={db_gross_rate:.2f}%')
-            all_pass = False
-        else:
-            log(f'  ✅ 毛利率一致: {csv_gross_rate:.2f}%')
-        
-        if abs(csv_promo_rate - db_promo_rate) > 0.5:
-            log(f'  ❌ 推广费率不一致: CSV={csv_promo_rate:.2f}%, DB={db_promo_rate:.2f}%')
-            all_pass = False
-        else:
-            log(f'  ✅ 推广费率一致: {csv_promo_rate:.2f}%')
-        
-        if abs(csv_net_rate - db_net_rate) > 0.5:
-            log(f'  ❌ 净利率不一致: CSV={csv_net_rate:.2f}%, DB={db_net_rate:.2f}%')
-            all_pass = False
-        else:
-            log(f'  ✅ 净利率一致: {csv_net_rate:.2f}%')
-        
-        # 设计预期验证
-        gross_in_range = design_ranges["毛利率"][0] <= csv_gross_rate <= design_ranges["毛利率"][1]
-        promo_in_range = design_ranges["推广费率"][0] <= csv_promo_rate <= design_ranges["推广费率"][1]
-        net_in_range = design_ranges["净利率"][0] <= csv_net_rate <= design_ranges["净利率"][1]
-        
-        if not gross_in_range:
-            log(f'  ⚠️  毛利率超出设计范围: {csv_gross_rate:.2f}%')
-        if not promo_in_range:
-            log(f'  ⚠️  推广费率超出设计范围: {csv_promo_rate:.2f}%')
-        if not net_in_range:
-            log(f'  ⚠️  净利率超出设计范围: {csv_net_rate:.2f}%')
-        
-        if gross_in_range and promo_in_range and net_in_range:
-            log(f'  ✅ 所有指标符合设计预期')
-        
-        return all_pass
-        
-    except Exception as e:
-        log(f'  ❌ 验证失败: {e}')
-        return False
-
-def verify_ads_consistency(db_config):
-    """验证ADS层数据一致性"""
-    log('\n【ADS层数据验证】')
+        financial_data.append([
+            layer,
+            f'{gross_profit:,.2f}',
+            f'{gross_rate:.2f}%',
+            f'{promo:,.2f}',
+            f'{promo_rate:.2f}%',
+            f'{net_profit:,.2f}',
+            f'{net_rate:.2f}%'
+        ])
     
-    try:
-        conn = get_db_connection(db_config)
-        cursor = conn.cursor()
-        
-        # 检查ADS表是否存在
-        cursor.execute('SHOW TABLES LIKE "ads_daily_report"')
-        if not cursor.fetchone():
-            log('  ⚠️  ads_daily_report表不存在，跳过验证')
-            conn.close()
-            return True
-        
-        # ADS层汇总
-        cursor.execute('''
-            SELECT SUM(`销售额`) as sales, SUM(`推广费`) as promo, SUM(`净利润`) as profit
-            FROM ads_daily_report
-        ''')
-        row = cursor.fetchone()
-        ads_sales = float(row[0]) if row[0] else 0
-        ads_promo = float(row[1]) if row[1] else 0
-        ads_profit = float(row[2]) if row[2] else 0
-        
-        # ODS层汇总
-        cursor.execute('''
-            SELECT SUM(final_amount) as sales FROM ods_orders WHERE order_status = '已完成'
-        ''')
-        ods_sales = float(cursor.fetchone()[0] or 0)
-        
-        cursor.execute('SELECT SUM(cost) as promo FROM ods_promotion')
-        ods_promo = float(cursor.fetchone()[0] or 0)
-        
-        conn.close()
-        
-        log(f'  ADS: 销售额={ads_sales:,.2f}, 推广费={ads_promo:,.2f}')
-        log(f'  ODS: 销售额={ods_sales:,.2f}, 推广费={ods_promo:,.2f}')
-        
-        sales_match = abs(ads_sales - ods_sales) < 100
-        promo_match = abs(ads_promo - ods_promo) < 100
-        
-        if sales_match and promo_match:
-            log('  ✅ ADS层数据一致')
-            return True
-        else:
-            log('  ❌ ADS层数据不一致')
-            if not sales_match:
-                log(f'     销售额差异: {abs(ads_sales - ods_sales):,.2f}')
-            if not promo_match:
-                log(f'     推广费差异: {abs(ads_promo - ods_promo):,.2f}')
-            return False
-            
-    except Exception as e:
-        log(f'  ❌ 验证失败: {e}')
-        return False
+    headers = ['数据层', '毛利', '毛利率', '推广费', '推广费率', '净利润', '净利率']
+    print_html_table(headers, financial_data, '财务指标对比表')
+
+def verify_consistency(metrics):
+    """验证各层数据一致性"""
+    log('<div class="status-section">')
+    log('<h3>一致性检查结果</h3>')
+    
+    all_pass = True
+    tolerance = 1.0  # 允许的误差范围
+    
+    # 检查字段
+    fields_to_check = ['订单数', '销售额', '推广费', '销量']
+    
+    # CSV vs ODS
+    if metrics.get('CSV') and metrics.get('ODS'):
+        log('<div class="status-item"><strong>📌 CSV vs ODS 对比</strong>')
+        for field in ['订单数', '销售额', '推广费']:
+            csv_val = metrics['CSV'].get(field, 0)
+            ods_val = metrics['ODS'].get(field, 0)
+            diff = abs(csv_val - ods_val)
+            if diff < tolerance:
+                log(f'<span class="status-pass">✅ {field}: 一致</span>')
+            else:
+                log(f'<span class="status-fail">❌ {field}: 不一致 (差异: {diff:,.2f})</span>')
+                all_pass = False
+        log('</div>')
+    
+    # ODS vs DWD
+    if metrics.get('ODS') and metrics.get('DWD'):
+        log('<div class="status-item"><strong>📌 ODS vs DWD 对比</strong>')
+        for field in fields_to_check:
+            ods_val = metrics['ODS'].get(field, 0)
+            dwd_val = metrics['DWD'].get(field, 0)
+            diff = abs(ods_val - dwd_val)
+            if diff < tolerance:
+                log(f'<span class="status-pass">✅ {field}: 一致</span>')
+            else:
+                log(f'<span class="status-fail">❌ {field}: 不一致 (差异: {diff:,.2f})</span>')
+                all_pass = False
+        log('</div>')
+    
+    # DWD vs DWS
+    if metrics.get('DWD') and metrics.get('DWS'):
+        log('<div class="status-item"><strong>📌 DWD vs DWS 对比</strong>')
+        for field in fields_to_check:
+            dwd_val = metrics['DWD'].get(field, 0)
+            dws_val = metrics['DWS'].get(field, 0)
+            diff = abs(dwd_val - dws_val)
+            if diff < tolerance:
+                log(f'<span class="status-pass">✅ {field}: 一致</span>')
+            else:
+                log(f'<span class="status-fail">❌ {field}: 不一致 (差异: {diff:,.2f})</span>')
+                all_pass = False
+        log('</div>')
+    
+    # DWS vs ADS
+    if metrics.get('DWS') and metrics.get('ADS'):
+        log('<div class="status-item"><strong>📌 DWS vs ADS 对比</strong>')
+        for field in ['订单数', '销售额', '推广费', '销量']:
+            dws_val = metrics['DWS'].get(field, 0)
+            ads_val = metrics['ADS'].get(field, 0)
+            diff = abs(dws_val - ads_val)
+            if diff < tolerance:
+                log(f'<span class="status-pass">✅ {field}: 一致</span>')
+            else:
+                log(f'<span class="status-fail">❌ {field}: 不一致 (差异: {diff:,.2f})</span>')
+                all_pass = False
+        log('</div>')
+    
+    log('</div>')
+    return all_pass
 
 def main():
     """主函数"""
@@ -356,50 +500,36 @@ def main():
         log(f'❌ 配置解析失败: {e}')
         sys.exit(1)
     
-    log('='*60)
-    log('数据一致性验证')
-    log('='*60)
-    log(f'企业体量: {business_scale}')
+    log('<div class="verification-report">')
+    log('<div class="report-header">')
+    log(f'<div style="display: flex; align-items: center; justify-content: space-between;"><span style="font-size: 18px; font-weight: 600;">📊 数据一致性验证报告</span><span style="font-size: 14px; opacity: 0.9;">企业体量: {business_scale}</span></div>')
+    log('</div>')
     
-    results = []
     orders_csv = os.path.join(data_dir, 'ods_orders.csv')
     promo_csv = os.path.join(data_dir, 'ods_promotion.csv')
     
-    # 验证订单数据
-    if os.path.exists(orders_csv):
-        results.append(verify_orders_consistency(orders_csv, db_config))
-    else:
-        log('\n【订单数据验证】')
-        log('  ⚠️  CSV文件不存在，跳过验证')
+    # 收集所有层的指标
+    metrics = collect_all_metrics(orders_csv, promo_csv, db_config)
     
-    # 验证推广数据
-    if os.path.exists(promo_csv):
-        results.append(verify_promotion_consistency(promo_csv, db_config))
-    else:
-        log('\n【推广数据验证】')
-        log('  ⚠️  CSV文件不存在，跳过验证')
+    if metrics is None:
+        log('\n❌ 数据收集失败')
+        sys.exit(1)
     
-    # 验证财务指标
-    if os.path.exists(orders_csv) and os.path.exists(promo_csv):
-        design_ranges = get_design_metrics({'businessScale': business_scale})
-        results.append(verify_financial_metrics(orders_csv, promo_csv, db_config, design_ranges))
-    else:
-        log('\n【财务指标验证】')
-        log('  ⚠️  CSV文件不完整，跳过验证')
+    # 显示对比表格
+    display_metrics_table(metrics)
     
-    # 验证ADS层
-    results.append(verify_ads_consistency(db_config))
+    # 验证一致性
+    all_pass = verify_consistency(metrics)
     
     # 总结
-    log('\n' + '='*60)
-    if all(results):
-        log('✅ 所有验证通过！数据完全一致')
-        log('='*60)
-        sys.exit(0)
+    if all_pass:
+        log('<div class="summary-box summary-success">✅ 验证通过！所有数据层完全一致</div>')
     else:
-        log('⚠️  部分验证未通过，请检查数据')
-        log('='*60)
-        sys.exit(1)
+        log('<div class="summary-box summary-warning">⚠️ 发现数据不一致，请检查上述差异项</div>')
+    
+    log('</div>')
+    log('</div>')  # 关闭 verification-report
+    sys.exit(0 if all_pass else 1)
 
 if __name__ == '__main__':
     main()
